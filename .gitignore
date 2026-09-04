@@ -1,0 +1,10 @@
+/build/
+/build*/
+/.cache/
+/compile_commands.json
+
+# Common compiler and editor artifacts
+*.o
+*.obj
+*.swp
+*~
