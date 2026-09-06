@@ -1,8 +1,7 @@
 #include <iostream>
 #include <thread>
 
-int main()
-{
+int main() {
     int worker_result = 0;
     std::thread worker([&worker_result] { worker_result = 17; });
     worker.join();
