@@ -146,7 +146,7 @@ std::array<sockaddr_in, kChannelCount> make_destinations(
 }
 
 void run_publisher(const PublisherConfig& config) {
-    if (config.cpu) {
+    if (config.cpu.has_value()) {
         apply_cpu_affinity(*config.cpu);
     }
 

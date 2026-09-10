@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <optional>
 
 namespace udp_ingestion {
 
@@ -18,6 +19,8 @@ struct ReceiveWorkerConfig {
     
     // This is also applied while waiting for the first datagram.
     std::chrono::milliseconds idle_timeout{3000};
+
+    std::optional<int> cpu;
 };
 
 enum class ReceiveStopReason {

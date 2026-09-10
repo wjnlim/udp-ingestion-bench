@@ -5,16 +5,20 @@ high-rate UDP ingestion architectures in C++17 on Linux. Phase 1 provides a
 controllable synthetic market-data publisher and an explicit 34-byte protocol.
 Phase 2 adds two dedicated RX threads, each polling one non-blocking UDP socket,
 decoding messages, tracking sequences, and updating a small accumulator.
+Phase 3 adds optional per-thread CPU affinity to the same receive architecture.
 
 The eventual comparison is dedicated userspace polling versus epoll-based
 event-driven readiness. No performance advantage is assumed or established.
-Receiver CPU affinity, epoll, inter-core handoff, and latency measurement are
-deferred.
+Epoll, inter-core handoff, and latency measurement are deferred.
 
 Design records:
 
 - [Phase 1: protocol and publisher](docs/phase1-design.md)
 - [Phase 2: dedicated receiver](docs/phase2-design.md)
+- [Phase 3: receiver CPU affinity](docs/phase3-design.md)
+
+Design records under `docs/` are currently local-only and Git-ignored; these
+links are available in the local workspace but may not resolve on GitHub.
 
 ## Development host
 
@@ -172,13 +176,17 @@ The receiver should exit with code 0.
 | `--base-port` | Channel 0 port; channel 1 uses the next port | `9000` |
 | `--count` | Aggregate expected datagram count | `1000` |
 | `--idle-timeout-ms` | Idle interval, including initial waiting | `3000` |
+| `--rx-cpu0` | Logical CPU for RX worker 0 | Inherited affinity |
+| `--rx-cpu1` | Logical CPU for RX worker 1 | Inherited affinity |
+| `--main-cpu` | Logical CPU for main | Inherited affinity |
 
 Base port must be 1-65534, count must be positive, and timeout must be
 1-86400000 ms. Allow enough time to start the publisher and accommodate gaps
 in the configured workload.
 
 For total count N, channel 0 expects `N / 2 + N % 2` datagrams and channel 1
-expects `N / 2`. A zero-target worker completes immediately.
+expects `N / 2`. A zero-target worker completes without receiving, after applying
+any requested affinity.
 
 Receiver count includes invalid and duplicate datagrams. Count completion alone
 does not establish correctness. Exit code 0 requires both channels to complete
@@ -187,6 +195,55 @@ outcomes, including timeout and receive errors, return code 1.
 
 The checksum simulates minimal processing and is printed after the run.
 The executable does not compare it against an expected checksum.
+
+### Receiver CPU affinity
+
+First inspect the available CPUs and physical-core topology:
+
+```sh
+lscpu -e=CPU,CORE,SOCKET,ONLINE
+taskset -pc $$
+```
+
+The following example uses main=0, publisher=1, RX0=2, and RX1=3. Use these
+numbers only if they are available and suitable for the current host. Prefer
+distinct physical cores for hot workers; on the recorded host, CPUs 10 and 11
+are SMT siblings of RX CPUs 2 and 3, not independent cores.
+
+Start the receiver in a shell at the project root:
+
+```sh
+./build-release/dedicated_receiver \
+  --count 20 --idle-timeout-ms 60000 \
+  --main-cpu 0 --rx-cpu0 2 --rx-cpu1 3 &
+receiver_pid=$!
+```
+
+After the `Bound` message, run these commands in the same shell before the
+idle timeout expires:
+
+```sh
+taskset -apc "$receiver_pid"
+./build-release/synthetic_publisher --count 20 --rate 100 --cpu 1
+wait "$receiver_pid"
+echo "receiver exit=$?"
+```
+
+The main TID equals the process ID and should have mask `0`; the other two
+threads should have masks `2` and `3` (listing order is not guaranteed).
+Both channels should receive 10 valid packets, finish cleanly, and produce
+receiver exit code 0. Startup output describes requested placement, not verified
+placement; inspect the actual masks rather than relying on that output alone.
+
+Each RX worker pins itself before polling. Main pins itself only after creating
+both workers, so omitted RX options retain the original inherited mask rather
+than inheriting main's new single-CPU mask. Omitting all CPU options leaves all
+three masks unchanged. CPU IDs must be unsigned decimal integers below
+`CPU_SETSIZE`; actual availability is checked when affinity is applied.
+Explicit affinity failure is fatal and requests cleanup of started threads.
+
+Affinity controls scheduler placement; it does not reserve cores, move IRQs,
+enable real-time scheduling, or establish a performance improvement.
 
 ## Validation status
 
@@ -200,6 +257,12 @@ Release builds and CTest runs. These localhost cases also matched expectations:
 - Partial publication: each channel receives five of ten expected packets,
   then terminates through idle timeout with exit code 1.
 
+For Phase 3, the operator also reported successful Debug/Release builds and both
+CTest tests, plus manual checks of actual thread masks, pinned localhost
+publication, main-only and omitted-affinity inheritance, invalid CLI inputs,
+and fatal RX/main affinity failures. Existing CTest tests cover protocol and
+processing behavior, not runtime affinity. Raw validation logs are not archived.
+
 These are correctness checks, not throughput or latency measurements. See the
 design records for validation coverage and limitations.
 
@@ -210,8 +273,8 @@ design records for validation coverage and limitations.
 - Total message count controls a run; duration-based runs are not implemented.
 - One ordinary `sendto` call per datagram; there is no batching or kernel bypass.
 - Pacing accuracy is subject to normal Linux scheduling and timer granularity.
-- No packet recovery, order book, exchange business semantics, receiver CPU
-  pinning, latency measurement, performance counters, or system tuning.
+- No packet recovery, order book, exchange business semantics, latency
+  measurement, performance counters, or system tuning.
 - Each RX thread actively retries after EAGAIN, consuming CPU even when idle.
 - No epoll baseline, SPSC handoff, receive batching, polling backoff,
   `_mm_pause()`, or application-enabled `SO_BUSY_POLL`.

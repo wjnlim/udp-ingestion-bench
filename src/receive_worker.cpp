@@ -1,4 +1,5 @@
 #include "udp_ingestion/receive_worker.hpp"
+#include "udp_ingestion/cpu_affinity.hpp"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -8,6 +9,7 @@
 #include <cerrno>
 #include <stdexcept>
 #include <system_error>
+#include <string>
 
 namespace udp_ingestion {
 
@@ -52,6 +54,11 @@ ReceiveWorker::~ReceiveWorker() {
 }
 
 ReceiveWorkerResult ReceiveWorker::run(const std::atomic<bool>& stop_requested) {
+    if (config_.cpu.has_value()) {
+        pin_current_thread(*config_.cpu, 
+                    "RX worker on port " + std::to_string(config_.port));
+    }
+    
     ReceiveWorkerResult result{};
     // one extra byte for detecting oversized datagrams.
     std::array<std::uint8_t, kProtocolV1BufSize + 1> buffer{};

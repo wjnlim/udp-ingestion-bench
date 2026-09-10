@@ -38,6 +38,7 @@ enable_project_warnings(receive_processing)
 add_executable(dedicated_receiver
     src/dedicated_receiver.cpp
     src/receive_worker.cpp
+    src/cpu_affinity.cpp
 )
 target_link_libraries(dedicated_receiver
     PRIVATE receive_processing Threads::Threads

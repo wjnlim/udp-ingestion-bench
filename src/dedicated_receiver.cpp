@@ -1,4 +1,5 @@
 #include "udp_ingestion/receive_worker.hpp"
+#include "udp_ingestion/cpu_affinity.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -13,6 +14,8 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <sched.h>
+#include <optional>
 
 namespace {
 
@@ -24,17 +27,23 @@ struct ReceiverConfig {
     std::uint64_t expected_total_packets = 1'000;
     std::chrono::milliseconds idle_timeout{3000};
     // bool help = false;
+
+    std::array<std::optional<int>, kChannelCount> rx_cpus{};
+    std::optional<int> main_cpu;
 };
 
 void print_usage(const char* program) {
     std::cout 
         << "Usage: " << program
         << " [--bind-address IPv4] [--base-port PORT]"
-           " [--count DATAGRAMS] [--idle-timeout-ms MS]\n"
+           " [--count DATAGRAMS] [--idle-timeout-ms MS]"
+           " [--rx-cpu0 N] [--rx-cpu1 N] [--main-cpu N]\n"
         << "  --count is the aggregate expected packet count across two channels.\n"
         << "  --idle-timeout-ms must be in [1, 86400000].\n"
+        << "  CPU options select Linux logical CPUs and are optional.\n"
+        << "  Omitted CPU options preserve inherited affinity.\n"
         << "  Defaults: 127.0.0.1, ports 9000/9001, count 1000,"
-           " idle timeout 3000 ms.\n";
+           " idle timeout 3000 ms, no explicit affinity.\n";
 }
 
 std::uint64_t parse_unsigned(std::string_view val_str, const std::string& option) {
@@ -87,6 +96,27 @@ ReceiverConfig parse_argument(int argc, char* argv[]) {
             }
             config.idle_timeout = std::chrono::milliseconds{
                 static_cast<std::chrono::milliseconds::rep>(timeout)};
+        } else if (option == "--rx-cpu0" ||
+                   option == "--rx-cpu1" ||
+                   option == "--main-cpu") {
+            const auto cpu = parse_unsigned(value, option);
+            
+            if (cpu >= static_cast<std::uint64_t>(CPU_SETSIZE)) {
+                throw std::invalid_argument(
+                    option + ": CPU " + std::to_string(cpu) +
+                    " is outside the supported CPU set");
+            }
+
+            const auto logical_cpu = static_cast<int>(cpu);
+
+            if (option == "--rx-cpu0") {
+                config.rx_cpus[0] = logical_cpu;
+            } else if (option == "--rx-cpu1") {
+                config.rx_cpus[1] = logical_cpu;
+            } else {
+                config.main_cpu = logical_cpu;
+            }
+
         } else {
             throw std::invalid_argument("unknown option: " + option);
         }
@@ -108,6 +138,7 @@ udp_ingestion::ReceiveWorkerConfig make_worker_config (
     }
 
     worker_config.idle_timeout = config.idle_timeout;
+    worker_config.cpu = config.rx_cpus[channel];
 
     return worker_config;
 }
@@ -154,6 +185,19 @@ bool is_clean_result(const udp_ingestion::ReceiveWorkerResult& result) {
             && result.state.late_or_duplicate_packets == 0;
 }
 
+void print_affinity_request(const std::string& role,
+                            const std::optional<int>& cpu) {
+    std::cout << role << ": ";
+
+    if (cpu.has_value()) {
+        std::cout << "requested CPU " << *cpu;
+    } else {
+        std::cout << "preserve inherited affinity";
+    }
+
+    std::cout << '\n';
+}
+
 int run_receiver(const ReceiverConfig& config) {
     const std::array<udp_ingestion::ReceiveWorkerConfig, kChannelCount>
         worker_configs{
@@ -171,6 +215,10 @@ int run_receiver(const ReceiverConfig& config) {
     std::array<udp_ingestion::ReceiveWorkerResult, kChannelCount> results {};
     std::array<std::exception_ptr, kChannelCount> errors{};
     std::array<std::thread, kChannelCount> threads{};
+
+    print_affinity_request("main", config.main_cpu);
+    print_affinity_request("RX worker 0", worker_configs[0].cpu);
+    print_affinity_request("RX worker 1", worker_configs[1].cpu);
 
     // sockets are bound. RX threads start
     std::cout 
@@ -192,6 +240,11 @@ int run_receiver(const ReceiverConfig& config) {
                     stop_requested.store(true, std::memory_order_relaxed);
                 }
             });
+        }
+        // RX threads have inherited main's original affinity mask.
+        // Changing main's affinity now does not change their masks.
+        if (config.main_cpu.has_value()) {
+            udp_ingestion::pin_current_thread(*config.main_cpu, "main");
         }
 
     } catch (...) {
