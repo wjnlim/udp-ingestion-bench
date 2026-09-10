@@ -29,8 +29,8 @@ struct MarketDataMessage {
 };
 
 inline constexpr std::int64_t kPriceScale = 10'000;
-inline constexpr std::size_t kProtocolV1WireSize = 34;
-using ProtocolV1Buffer = std::array<std::uint8_t, kProtocolV1WireSize>;
+inline constexpr std::size_t kProtocolV1BufSize = 34;
+using ProtocolV1Buffer = std::array<std::uint8_t, kProtocolV1BufSize>;
 /*
     offset  size  field
     0       8     sequence

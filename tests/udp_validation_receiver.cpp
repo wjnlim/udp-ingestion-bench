@@ -92,7 +92,7 @@ void run(std::uint16_t base_port, std::uint64_t expected_per_channel) {
             std::array<std::uint8_t, 128> buffer{};
             const auto size =
                 ::recv(sockets[channel].get_fd(), buffer.data(), buffer.size(), 0);
-            if (size != static_cast<ssize_t>(udp_ingestion::kProtocolV1WireSize)) {
+            if (size != static_cast<ssize_t>(udp_ingestion::kProtocolV1BufSize)) {
                 throw std::runtime_error("received payload size is not 34 bytes");
             }
             udp_ingestion::MarketDataMessage message{};

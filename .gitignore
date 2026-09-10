@@ -2,6 +2,7 @@
 /build*/
 /.cache/
 /compile_commands.json
+/docs/
 
 # Common compiler and editor artifacts
 *.o

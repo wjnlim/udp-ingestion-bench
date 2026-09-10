@@ -36,11 +36,21 @@ std::uint32_t read_u32(const std::uint8_t* data, std::size_t offset) {
 }
 
 // convert a signed int64_t into its 2's complement representation 
-// regardless of underlying binary representation of negativ integer
+// regardless of underlying binary representation of negative integer
 std::uint64_t signed_to_twos_complement(std::int64_t value) {
     if (value >= 0) {
         return static_cast<std::uint64_t>(value);
     }
+    /*
+        The two's complement of x is defined as the number that, 
+        when added to x, results in 2^n. 
+        To obtain the two's complement representation (tc) of a negative number v, 
+        we take the two's complement of its absolute value. 
+        Mathematically, this is 'tc = 2^64 - (-v)'. 
+        However, since -v can cause an overflow, 
+        the formula can be rewritten by adding and subtracting 1 to prevent this, 
+        resulting in: tc = 2^64 - (-(v+1-1)) => tc = 2^64 - 1 - (-(v+1))
+    */
     return std::numeric_limits<std::uint64_t>::max() -
            static_cast<std::uint64_t>(-(value + 1));
 }
@@ -80,7 +90,7 @@ ProtocolV1Buffer encode_protocol_v1(const MarketDataMessage& message) {
 bool decode_protocol_v1(const std::uint8_t* data,
                         std::size_t size,
                         MarketDataMessage& message) {
-    if (data == nullptr || size != kProtocolV1WireSize ||
+    if (data == nullptr || size != kProtocolV1BufSize ||
         !valid_message_type(data[32]) || !valid_side(data[33])) {
         return false;
     }

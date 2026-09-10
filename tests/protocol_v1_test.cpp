@@ -84,7 +84,7 @@ void test_generation() {
 }  // namespace
 
 int main() {
-    static_assert(udp_ingestion::kProtocolV1WireSize == 34,
+    static_assert(udp_ingestion::kProtocolV1BufSize == 34,
                   "Protocol v1 wire size must remain 34 bytes");
     test_round_trip(1'234'567, udp_ingestion::MessageType::Add,
                     udp_ingestion::Side::Buy);

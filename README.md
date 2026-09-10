@@ -1,12 +1,25 @@
 # udp-ingestion-bench
 
 `udp-ingestion-bench` is intended to support controlled experiments with
-high-rate UDP ingestion architectures in C++ on Linux. Phase 1 provides a
-controllable synthetic market-data publisher and correctness validation for a
-small binary protocol. It does not yet contain either receiver architecture or
-performance benchmark logic.
+high-rate UDP ingestion architectures in C++17 on Linux. Phase 1 provides a
+controllable synthetic market-data publisher and an explicit 34-byte protocol.
+Phase 2 adds two dedicated RX threads, each polling one non-blocking UDP socket,
+decoding messages, tracking sequences, and updating a small accumulator.
+
+The eventual comparison is dedicated userspace polling versus epoll-based
+event-driven readiness. No performance advantage is assumed or established.
+Receiver CPU affinity, epoll, inter-core handoff, and latency measurement are
+deferred.
+
+Design records:
+
+- [Phase 1: protocol and publisher](docs/phase1-design.md)
+- [Phase 2: dedicated receiver](docs/phase2-design.md)
 
 ## Development host
+
+The following records the initial environment inspection; it is not a fresh
+measurement of the host configuration on every run.
 
 - Environment: bare-metal Ubuntu 24.04.4 LTS (Noble), not a virtual machine
 - Kernel: 7.0.0-31-generic, x86-64
@@ -86,7 +99,9 @@ cmake --build build-debug
 The same commands can be run with `build-release` and
 `-DCMAKE_BUILD_TYPE=Release` for a Release build.
 
-Run the automated protocol tests with:
+With `BUILD_TESTING=ON` (the default), CTest runs `protocol_v1_test` and
+`receive_processing_test`. These exercise protocol and receiver processing
+semantics without opening network sockets. Run them with:
 
 ```sh
 ctest --test-dir build-debug --output-on-failure
@@ -129,7 +144,66 @@ The receiver helper only checks Phase 1 datagram size, decoding, and per-channel
 sequence continuity. It is not a benchmark receiver and is not a starting point
 for an optimized architecture.
 
-## Phase 1 limitations
+## Dedicated receiver
+
+Start the receiver in terminal A:
+
+```sh
+./build-debug/dedicated_receiver \
+  --bind-address 127.0.0.1 --base-port 19000 \
+  --count 20 --idle-timeout-ms 10000
+echo "receiver exit=$?"
+```
+
+After the receiver prints its `Bound` message, run the publisher in terminal B:
+
+```sh
+./build-debug/synthetic_publisher \
+  --address 127.0.0.1 --base-port 19000 --count 20 --rate 1000
+```
+
+Both channels should report `count_reached`, 10 received and valid datagrams,
+expected sequence 11, and zero invalid/gap/late-or-duplicate counters.
+The receiver should exit with code 0.
+
+| Option | Meaning | Default |
+| --- | --- | --- |
+| `--bind-address` | Local IPv4 address to bind | `127.0.0.1` |
+| `--base-port` | Channel 0 port; channel 1 uses the next port | `9000` |
+| `--count` | Aggregate expected datagram count | `1000` |
+| `--idle-timeout-ms` | Idle interval, including initial waiting | `3000` |
+
+Base port must be 1-65534, count must be positive, and timeout must be
+1-86400000 ms. Allow enough time to start the publisher and accommodate gaps
+in the configured workload.
+
+For total count N, channel 0 expects `N / 2 + N % 2` datagrams and channel 1
+expects `N / 2`. A zero-target worker completes immediately.
+
+Receiver count includes invalid and duplicate datagrams. Count completion alone
+does not establish correctness. Exit code 0 requires both channels to complete
+with no invalid packets, forward gaps, or late-or-duplicate packets. Other
+outcomes, including timeout and receive errors, return code 1.
+
+The checksum simulates minimal processing and is printed after the run.
+The executable does not compare it against an expected checksum.
+
+## Validation status
+
+During manual Phase 2 validation, the operator reported successful Debug and
+Release builds and CTest runs. These localhost cases also matched expectations:
+
+- Debug and Release: 20 packets, split 10/10, with matching channel checksums.
+- Odd count: 21 packets, split 11/10.
+- Count 1: channel 0 receives one packet; channel 1 completes with target zero.
+- No publisher: both workers terminate through idle timeout with exit code 1.
+- Partial publication: each channel receives five of ten expected packets,
+  then terminates through idle timeout with exit code 1.
+
+These are correctness checks, not throughput or latency measurements. See the
+design records for validation coverage and limitations.
+
+## Current limitations
 
 - IPv4 UDP unicast only; multicast is deferred.
 - Exactly two logical channels on consecutive ports.
@@ -138,3 +212,10 @@ for an optimized architecture.
 - Pacing accuracy is subject to normal Linux scheduling and timer granularity.
 - No packet recovery, order book, exchange business semantics, receiver CPU
   pinning, latency measurement, performance counters, or system tuning.
+- Each RX thread actively retries after EAGAIN, consuming CPU even when idle.
+- No epoll baseline, SPSC handoff, receive batching, polling backoff,
+  `_mm_pause()`, or application-enabled `SO_BUSY_POLL`.
+- Count and idle-timeout termination assume a controlled finite run. Unrelated
+  or duplicate traffic can consume the expected count.
+- Sequence statistics describe observed gaps and late/duplicate arrivals;
+  they do not establish exact final network loss.

@@ -8,6 +8,7 @@
 
 #include <array>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <cstdlib>
 #include <cstdint>
@@ -17,6 +18,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <thread>
 
 namespace {
@@ -49,21 +52,16 @@ private:
     int descriptor_;
 };
 
-std::uint64_t parse_unsigned(const std::string& val_str, const char* option) {
-    if (val_str.empty() || val_str.front() == '-') {
-        throw std::invalid_argument(std::string(option) + " requires an unsigned integer");
+std::uint64_t parse_unsigned(std::string_view val_str, const std::string& option) {
+    std::uint64_t value = 0;
+    const auto result = std::from_chars(
+        val_str.data(), val_str.data() + val_str.size(), value);
+    if (val_str.empty() || result.ec != std::errc{} ||
+        result.ptr != val_str.data() + val_str.size()) {
+        throw std::invalid_argument(
+            option + " requires an unsigned decimal integer");
     }
-    std::size_t parsed = 0;
-    unsigned long long value = 0;
-    try {
-        value = std::stoull(val_str, &parsed);
-    } catch (const std::exception&) {
-        throw std::invalid_argument(std::string(option) + " requires an integer");
-    }
-    if (parsed != val_str.size()) {
-        throw std::invalid_argument(std::string(option) + " requires an integer");
-    }
-    return static_cast<std::uint64_t>(value);
+    return value;
 }
 
 void print_usage(const char* program) {
@@ -83,33 +81,33 @@ PublisherConfig parse_arguments(int argc, char* argv[]) {
         if (i + 1 >= argc) {
             throw std::invalid_argument(option + " requires a value");
         }
-        const std::string value = argv[++i];
+        const std::string_view value = argv[++i];
         if (option == "--address") {
-            config.destination_address = value;
+            config.destination_address = std::string(value);
         } else if (option == "--base-port") {
-            const auto port = parse_unsigned(value, "--base-port");
+            const auto port = parse_unsigned(value, option);
             if (port == 0 || port > 65534) {
                 throw std::invalid_argument("--base-port must be in [1, 65534]");
             }
             config.base_port = static_cast<std::uint16_t>(port);
         } else if (option == "--rate") {
-            config.rate = parse_unsigned(value, "--rate");
+            config.rate = parse_unsigned(value, option);
             if (config.rate == 0) {
                 throw std::invalid_argument("--rate must be positive");
             }
         } else if (option == "--count") {
-            config.count = parse_unsigned(value, "--count");
+            config.count = parse_unsigned(value, option);
             if (config.count == 0) {
                 throw std::invalid_argument("--count must be positive");
             }
         } else if (option == "--instruments") {
-            const auto instr = parse_unsigned(value, "--instruments");
+            const auto instr = parse_unsigned(value, option);
             if (instr == 0 || instr > std::numeric_limits<std::uint32_t>::max()) {
                 throw std::invalid_argument("--instruments is out of range");
             }
             config.instrument_count = static_cast<std::uint32_t>(instr);
         } else if (option == "--cpu") {
-            const auto cpu = parse_unsigned(value, "--cpu");
+            const auto cpu = parse_unsigned(value, option);
             if (cpu >= CPU_SETSIZE) {
                 throw std::invalid_argument("--cpu is outside the supported CPU set");
             }
