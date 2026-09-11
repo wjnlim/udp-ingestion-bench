@@ -17,9 +17,18 @@ ReceiveWorker::ReceiveWorker(const ReceiveWorkerConfig& config) : config_(config
     if (config_.port == 0) {
         throw std::invalid_argument("receive port must be positive");
     }
+    // if (config_.port == 0 || config_.port > 65535) {
+    //     throw std::invalid_argument("receive port must be positive");
+    // }
 
-    if (config_.idle_timeout <= std::chrono::milliseconds::zero()) {
-        throw std::invalid_argument("idle timeout must be positive");
+    // if (config_.idle_timeout <= std::chrono::milliseconds::zero()) {
+    //     throw std::invalid_argument("idle timeout must be positive");
+    // }
+
+    if (config_.idle_timeout <= std::chrono::milliseconds::zero() ||
+        config_.idle_timeout > std::chrono::milliseconds{86'400'000}) {
+        throw std::invalid_argument(
+            "idle timeout must be in [1, 86400000] ms");
     }
 
     sockaddr_in address{};

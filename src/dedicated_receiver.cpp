@@ -33,6 +33,7 @@ struct ReceiverConfig {
 };
 
 void print_usage(const char* program) {
+    const ReceiverConfig defaults{};
     std::cout 
         << "Usage: " << program
         << " [--bind-address IPv4] [--base-port PORT]"
@@ -42,8 +43,14 @@ void print_usage(const char* program) {
         << "  --idle-timeout-ms must be in [1, 86400000].\n"
         << "  CPU options select Linux logical CPUs and are optional.\n"
         << "  Omitted CPU options preserve inherited affinity.\n"
-        << "  Defaults: 127.0.0.1, ports 9000/9001, count 1000,"
-           " idle timeout 3000 ms, no explicit affinity.\n";
+        << "  Defaults: " << defaults.bind_address
+        << ", ports " << defaults.base_port
+        << "/" << defaults.base_port+1
+        << ", count " << defaults.expected_total_packets
+        << ", idle timeout " << defaults.idle_timeout.count()
+        << " ms, no explicit affinity.\n";
+        // << "  Defaults: 127.0.0.1, ports 9000/9001, count 1000,"
+        //    " idle timeout 3000 ms, no explicit affinity.\n";
 }
 
 std::uint64_t parse_unsigned(std::string_view val_str, const std::string& option) {

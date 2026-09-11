@@ -1,5 +1,6 @@
 #include "udp_ingestion/protocol_v1.hpp"
 #include "udp_ingestion/synthetic_message.hpp"
+#include "udp_ingestion/cpu_affinity.hpp"
 
 #include <arpa/inet.h>
 #include <sched.h>
@@ -119,15 +120,15 @@ PublisherConfig parse_arguments(int argc, char* argv[]) {
     return config;
 }
 
-void apply_cpu_affinity(int cpu) {
-    cpu_set_t set;
-    CPU_ZERO(&set);
-    CPU_SET(cpu, &set);
-    if (::sched_setaffinity(0, sizeof(set), &set) != 0) {
-        throw std::runtime_error(std::string("sched_setaffinity for CPU ") +
-                                 std::to_string(cpu) + ": " + std::strerror(errno));
-    }
-}
+// void apply_cpu_affinity(int cpu) {
+//     cpu_set_t set;
+//     CPU_ZERO(&set);
+//     CPU_SET(cpu, &set);
+//     if (::sched_setaffinity(0, sizeof(set), &set) != 0) {
+//         throw std::runtime_error(std::string("sched_setaffinity for CPU ") +
+//                                  std::to_string(cpu) + ": " + std::strerror(errno));
+//     }
+// }
 
 std::array<sockaddr_in, kChannelCount> make_destinations(
     const PublisherConfig& config) {
@@ -147,7 +148,8 @@ std::array<sockaddr_in, kChannelCount> make_destinations(
 
 void run_publisher(const PublisherConfig& config) {
     if (config.cpu.has_value()) {
-        apply_cpu_affinity(*config.cpu);
+        // apply_cpu_affinity(*config.cpu);
+        udp_ingestion::pin_current_thread(*config.cpu, "publisher");
     }
 
     UdpSocket socket;

@@ -6,16 +6,21 @@ controllable synthetic market-data publisher and an explicit 34-byte protocol.
 Phase 2 adds two dedicated RX threads, each polling one non-blocking UDP socket,
 decoding messages, tracking sequences, and updating a small accumulator.
 Phase 3 adds optional per-thread CPU affinity to the same receive architecture.
+Phase 4 adds a direct, level-triggered epoll receiver whose main thread
+multiplexes both UDP sockets and performs the same application-level processing.
 
-The eventual comparison is dedicated userspace polling versus epoll-based
-event-driven readiness. No performance advantage is assumed or established.
-Epoll, inter-core handoff, and latency measurement are deferred.
+The primary comparison is dedicated per-feed active polling versus
+readiness-driven fd multiplexing. These intentionally use different execution
+contexts and CPU budgets; this is not an isolated recv-versus-epoll syscall
+microbenchmark. No performance advantage is assumed or established.
+Inter-core handoff and latency measurement are deferred.
 
 Design records:
 
 - [Phase 1: protocol and publisher](docs/phase1-design.md)
 - [Phase 2: dedicated receiver](docs/phase2-design.md)
 - [Phase 3: receiver CPU affinity](docs/phase3-design.md)
+- [Phase 4: multiplexed epoll receiver](docs/phase4-design.md)
 
 Design records under `docs/` are currently local-only and Git-ignored; these
 links are available in the local workspace but may not resolve on GitHub.
@@ -83,6 +88,7 @@ shaping; scheduler and timer granularity will limit accuracy at high rates.
 logical CPU N. If omitted, the application does not change its affinity. This
 control is for keeping later experiments repeatable, not for optimizing the
 publisher, and no CPU number is hardcoded.
+The publisher now reuses the same `pin_current_thread()` helper as both receivers.
 
 UDP unicast is currently used as an experimental simplification. The publisher
 must be given the receiver address and base port. Protocol v1 and synthetic
@@ -103,13 +109,22 @@ cmake --build build-debug
 The same commands can be run with `build-release` and
 `-DCMAKE_BUILD_TYPE=Release` for a Release build.
 
-With `BUILD_TESTING=ON` (the default), CTest runs `protocol_v1_test` and
-`receive_processing_test`. These exercise protocol and receiver processing
-semantics without opening network sockets. Run them with:
+With `BUILD_TESTING=ON` (the default), CTest runs three tests:
+
+- `protocol_v1_test`: protocol and synthetic generation, without sockets.
+- `receive_processing_test`: sequence/statistics/processing, without sockets.
+- `epoll_receive_worker_test`: actual localhost UDP and epoll behavior.
+
+Run them with:
 
 ```sh
 ctest --test-dir build-debug --output-on-failure
 ```
+
+The epoll test uses localhost ports 29000/29001 and has a 30-second CTest timeout.
+It runs serially within one CTest invocation. Do not run Debug and Release CTest
+simultaneously or use those ports in another process. Run the Release equivalent
+with `ctest --test-dir build-release --output-on-failure` after building it.
 
 ## Run
 
@@ -245,6 +260,74 @@ Explicit affinity failure is fatal and requests cleanup of started threads.
 Affinity controls scheduler placement; it does not reserve cores, move IRQs,
 enable real-time scheduling, or establish a performance improvement.
 
+## Epoll receiver
+
+`epoll_receiver` uses one execution context: main itself receives, decodes,
+validates, and accumulates both channels. It creates no RX thread or worker pool.
+The socket settings and `process_datagram()` implementation are shared in
+semantics with the dedicated path; the active-polling loop remains unchanged.
+
+The common options and defaults are `--bind-address 127.0.0.1`,
+`--base-port 9000`, `--count 1000`, and `--idle-timeout-ms 3000`, with the same
+ranges and count rules as the dedicated receiver. Epoll has one optional
+affinity flag, `--rx-cpu N`, rather than `--rx-cpu0`, `--rx-cpu1`, or
+`--main-cpu`. Omission preserves main's inherited mask.
+
+In terminal A:
+
+```sh
+./build-release/epoll_receiver \
+  --base-port 19000 --count 20 --idle-timeout-ms 60000
+echo "receiver exit=$?"
+```
+
+After `Bound`, in terminal B:
+
+```sh
+./build-release/synthetic_publisher \
+  --base-port 19000 --count 20 --rate 100
+echo "publisher exit=$?"
+```
+
+Expect 10 valid packets per channel, expected sequence 11, zero anomaly counters,
+`count_reached`, and exit 0. For the same input, compare each channel's checksum
+with the corresponding dedicated result; matching sums are not a general proof
+of packet identity. The executable itself does not compare checksums.
+
+To inspect placement, first check the host topology and available CPUs as above.
+The following uses CPU 2 for epoll and CPU 1 for publication as examples only.
+Start in a shell at the project root:
+
+```sh
+./build-release/epoll_receiver \
+  --base-port 19000 --count 20 --idle-timeout-ms 60000 --rx-cpu 2 &
+receiver_pid=$!
+```
+
+After `Bound`, run in the same shell before timeout:
+
+```sh
+taskset -apc "$receiver_pid"
+ps -T -p "$receiver_pid" -o pid,tid,comm
+./build-release/synthetic_publisher \
+  --base-port 19000 --count 20 --rate 100 --cpu 1
+wait "$receiver_pid"
+echo "receiver exit=$?"
+```
+
+Expect one receiver thread with PID equal to TID and mask 2. Startup affinity
+output describes a request; failure is fatal before receiving. There is no
+separate main/housekeeping thread to pin in this executable.
+
+The LT loop handles each ready channel for at most 64 ordinary `recv()` attempts
+per turn, counting EINTR attempts, and stops that turn on EAGAIN. Remaining
+readable data is eligible for another LT notification. This is a scheduling
+budget, not `recvmmsg` or multi-datagram receive batching, and 64 is not a measured
+optimum. Idle deadlines are checked after event processing and interrupted waits;
+`epoll_wait()` uses the nearest active deadline, rounded up to milliseconds.
+Completed/timed-out channels are deregistered. One channel's traffic does not
+reset its peer's idle timer. Fatal errors return 1 and release owned descriptors.
+
 ## Validation status
 
 During manual Phase 2 validation, the operator reported successful Debug and
@@ -260,8 +343,16 @@ Release builds and CTest runs. These localhost cases also matched expectations:
 For Phase 3, the operator also reported successful Debug/Release builds and both
 CTest tests, plus manual checks of actual thread masks, pinned localhost
 publication, main-only and omitted-affinity inheritance, invalid CLI inputs,
-and fatal RX/main affinity failures. Existing CTest tests cover protocol and
+and fatal RX/main affinity failures. Phase 3's CTest tests cover protocol and
 processing behavior, not runtime affinity. Raw validation logs are not archived.
+
+For Phase 4, the operator reported successful Debug/Release builds and all three
+CTest tests, dedicated regression reception, Debug/Release epoll reception with
+matching per-channel checksums, single-thread affinity and inherited-mask checks,
+no-publisher and partial-publication timeouts, independent peer timeout during
+ongoing traffic, and CLI/affinity failures. The publisher's migration to the shared
+affinity helper also passed operator-run regression checks. No tests were rerun
+as part of documentation, and no raw checksum values or logs are archived here.
 
 These are correctness checks, not throughput or latency measurements. See the
 design records for validation coverage and limitations.
@@ -275,9 +366,13 @@ design records for validation coverage and limitations.
 - Pacing accuracy is subject to normal Linux scheduling and timer granularity.
 - No packet recovery, order book, exchange business semantics, latency
   measurement, performance counters, or system tuning.
-- Each RX thread actively retries after EAGAIN, consuming CPU even when idle.
-- No epoll baseline, SPSC handoff, receive batching, polling backoff,
+- Dedicated RX threads actively retry after EAGAIN, consuming CPU even when idle.
+- No SPSC handoff, receive batching, polling backoff,
   `_mm_pause()`, or application-enabled `SO_BUSY_POLL`.
+- No libevent validation receiver yet; it is planned as an external sanity check,
+  not a third primary architecture. Boost.Asio and other frameworks are deferred.
+- Resource budgets differ between dedicated polling and multiplexed epoll;
+  current correctness checks establish no throughput, latency, or speedup claim.
 - Count and idle-timeout termination assume a controlled finite run. Unrelated
   or duplicate traffic can consume the expected count.
 - Sequence statistics describe observed gaps and late/duplicate arrivals;

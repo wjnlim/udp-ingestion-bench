@@ -25,8 +25,12 @@ add_library(protocol_v1
 target_include_directories(protocol_v1 PUBLIC include)
 enable_project_warnings(protocol_v1)
 
-add_executable(synthetic_publisher src/publisher.cpp)
-target_link_libraries(synthetic_publisher PRIVATE protocol_v1)
+add_executable(synthetic_publisher 
+    src/publisher.cpp
+    src/cpu_affinity.cpp
+)
+target_link_libraries(synthetic_publisher 
+    PRIVATE protocol_v1 Threads::Threads)
 enable_project_warnings(synthetic_publisher)
 
 add_library(receive_processing
@@ -45,6 +49,16 @@ target_link_libraries(dedicated_receiver
 )
 enable_project_warnings(dedicated_receiver)
 
+add_executable(epoll_receiver
+    src/epoll_receiver.cpp
+    src/epoll_receive_worker.cpp
+    src/cpu_affinity.cpp
+)
+target_link_libraries(epoll_receiver
+    PRIVATE receive_processing Threads::Threads
+)
+enable_project_warnings(epoll_receiver)
+
 include(CTest)
 if(BUILD_TESTING)
     add_executable(protocol_v1_test tests/protocol_v1_test.cpp)
@@ -60,4 +74,23 @@ if(BUILD_TESTING)
     target_link_libraries(receive_processing_test PRIVATE receive_processing)
     enable_project_warnings(receive_processing_test)
     add_test(NAME receive_processing_test COMMAND receive_processing_test)
+
+    add_executable(epoll_receive_worker_test
+        tests/epoll_receive_worker_test.cpp
+        src/epoll_receive_worker.cpp
+        src/cpu_affinity.cpp
+    )
+    target_link_libraries(epoll_receive_worker_test
+        PRIVATE receive_processing Threads::Threads
+    )
+    enable_project_warnings(epoll_receive_worker_test)
+    add_test(
+        NAME epoll_receive_worker_test
+        COMMAND epoll_receive_worker_test
+    )
+    set_tests_properties(epoll_receive_worker_test PROPERTIES
+        TIMEOUT 30
+        RUN_SERIAL TRUE
+    )
+
 endif()

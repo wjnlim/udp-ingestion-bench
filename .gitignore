@@ -3,6 +3,7 @@
 /.cache/
 /compile_commands.json
 /docs/
+/.vscode/settings.json
 
 # Common compiler and editor artifacts
 *.o
