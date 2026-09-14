@@ -42,6 +42,8 @@ enable_project_warnings(receive_processing)
 add_executable(dedicated_receiver
     src/dedicated_receiver.cpp
     src/receive_worker.cpp
+    src/downstream_worker.cpp
+    src/timestamped_receive.cpp
     src/cpu_affinity.cpp
 )
 target_link_libraries(dedicated_receiver
@@ -52,6 +54,9 @@ enable_project_warnings(dedicated_receiver)
 add_executable(epoll_receiver
     src/epoll_receiver.cpp
     src/epoll_receive_worker.cpp
+    src/downstream_worker.cpp
+    src/stop_event.cpp
+    src/timestamped_receive.cpp
     src/cpu_affinity.cpp
 )
 target_link_libraries(epoll_receiver
@@ -78,6 +83,8 @@ if(BUILD_TESTING)
     add_executable(epoll_receive_worker_test
         tests/epoll_receive_worker_test.cpp
         src/epoll_receive_worker.cpp
+        src/stop_event.cpp
+        src/timestamped_receive.cpp
         src/cpu_affinity.cpp
     )
     target_link_libraries(epoll_receive_worker_test
@@ -91,6 +98,91 @@ if(BUILD_TESTING)
     set_tests_properties(epoll_receive_worker_test PROPERTIES
         TIMEOUT 30
         RUN_SERIAL TRUE
+    )
+
+    add_executable(spsc_queue_test
+        tests/spsc_queue_test.cpp
+    )
+    target_include_directories(spsc_queue_test PRIVATE include)
+    target_link_libraries(spsc_queue_test PRIVATE Threads::Threads)
+    enable_project_warnings(spsc_queue_test)
+    add_test(NAME spsc_queue_test COMMAND spsc_queue_test)
+    set_tests_properties(spsc_queue_test PROPERTIES
+        TIMEOUT 30
+    )
+
+    add_executable(downstream_worker_test
+        tests/downstream_worker_test.cpp
+        src/downstream_worker.cpp
+        src/cpu_affinity.cpp
+    )
+    target_link_libraries(downstream_worker_test
+        PRIVATE receive_processing Threads::Threads
+    )
+    enable_project_warnings(downstream_worker_test)
+    add_test(
+        NAME downstream_worker_test
+        COMMAND downstream_worker_test
+    )
+    set_tests_properties(downstream_worker_test PROPERTIES
+        TIMEOUT 30
+    )
+
+    add_executable(timestamped_receive_test
+        tests/timestamped_receive_test.cpp
+        src/timestamped_receive.cpp
+    )
+    target_include_directories(timestamped_receive_test PRIVATE include)
+    enable_project_warnings(timestamped_receive_test)
+    add_test(
+        NAME timestamped_receive_test
+        COMMAND timestamped_receive_test
+    )
+    set_tests_properties(timestamped_receive_test PROPERTIES
+        TIMEOUT 30
+    )
+
+    add_executable(timestamped_receive_socket_test
+        tests/timestamped_receive_socket_test.cpp
+        src/timestamped_receive.cpp
+    )
+    target_include_directories(timestamped_receive_socket_test PRIVATE include)
+    enable_project_warnings(timestamped_receive_socket_test)
+    add_test(
+        NAME timestamped_receive_socket_test
+        COMMAND timestamped_receive_socket_test
+    )
+    set_tests_properties(timestamped_receive_socket_test PROPERTIES
+        TIMEOUT 30
+    )
+
+    add_executable(latency_clock_test
+        tests/latency_clock_test.cpp
+        src/latency_clock.cpp
+    )
+    target_include_directories(latency_clock_test PRIVATE include)
+    enable_project_warnings(latency_clock_test)
+    add_test(
+        NAME latency_clock_test
+        COMMAND latency_clock_test
+    )
+    set_tests_properties(latency_clock_test PROPERTIES
+        TIMEOUT 30
+    )
+
+    add_executable(latency_samples_test
+        tests/latency_samples_test.cpp
+        src/latency_samples.cpp
+        src/latency_clock.cpp
+    )
+    target_include_directories(latency_samples_test PRIVATE include)
+    enable_project_warnings(latency_samples_test)
+    add_test(
+        NAME latency_samples_test
+        COMMAND latency_samples_test
+    )
+    set_tests_properties(latency_samples_test PROPERTIES
+        TIMEOUT 30
     )
 
 endif()

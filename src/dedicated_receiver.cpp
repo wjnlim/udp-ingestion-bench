@@ -1,5 +1,8 @@
 #include "udp_ingestion/receive_worker.hpp"
 #include "udp_ingestion/cpu_affinity.hpp"
+#include "udp_ingestion/pipeline.hpp"
+#include "udp_ingestion/downstream_worker.hpp"
+#include "udp_ingestion/startup_gate.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -16,6 +19,8 @@
 #include <thread>
 #include <sched.h>
 #include <optional>
+#include <cstddef>
+#include <limits>
 
 namespace {
 
@@ -27,30 +32,35 @@ struct ReceiverConfig {
     std::uint64_t expected_total_packets = 1'000;
     std::chrono::milliseconds idle_timeout{3000};
     // bool help = false;
+    std::size_t queue_capacity = 4096;
 
     std::array<std::optional<int>, kChannelCount> rx_cpus{};
     std::optional<int> main_cpu;
+    std::optional<int> downstream_cpu;
 };
 
 void print_usage(const char* program) {
     const ReceiverConfig defaults{};
-    std::cout 
+    std::cout
         << "Usage: " << program
         << " [--bind-address IPv4] [--base-port PORT]"
            " [--count DATAGRAMS] [--idle-timeout-ms MS]"
-           " [--rx-cpu0 N] [--rx-cpu1 N] [--main-cpu N]\n"
+           " [--queue-capacity N]"
+           " [--rx-cpu0 N] [--rx-cpu1 N]"
+           " [--main-cpu N] [--downstream-cpu N]\n"
         << "  --count is the aggregate expected packet count across two channels.\n"
         << "  --idle-timeout-ms must be in [1, 86400000].\n"
+        << "  --queue-capacity is the slot count per channel;"
+           " it must be a positive power of two.\n"
         << "  CPU options select Linux logical CPUs and are optional.\n"
         << "  Omitted CPU options preserve inherited affinity.\n"
         << "  Defaults: " << defaults.bind_address
         << ", ports " << defaults.base_port
-        << "/" << defaults.base_port+1
+        << "/" << defaults.base_port + 1
         << ", count " << defaults.expected_total_packets
         << ", idle timeout " << defaults.idle_timeout.count()
-        << " ms, no explicit affinity.\n";
-        // << "  Defaults: 127.0.0.1, ports 9000/9001, count 1000,"
-        //    " idle timeout 3000 ms, no explicit affinity.\n";
+        << " ms, queue capacity " << defaults.queue_capacity
+        << " per channel, no explicit affinity.\n";
 }
 
 std::uint64_t parse_unsigned(std::string_view val_str, const std::string& option) {
@@ -103,9 +113,26 @@ ReceiverConfig parse_argument(int argc, char* argv[]) {
             }
             config.idle_timeout = std::chrono::milliseconds{
                 static_cast<std::chrono::milliseconds::rep>(timeout)};
+        } else if (option == "--queue-capacity") {
+            const auto capacity = parse_unsigned(value, option);
+
+            if (capacity == 0 || (capacity & (capacity-1)) != 0) {
+                throw std::invalid_argument(
+                    "--queue-capacity must be a positive power of two");
+            }
+
+            const auto maximum = std::numeric_limits<std::size_t>::max() 
+                                    / sizeof(udp_ingestion::PipelineEvent);
+            if (capacity > maximum) {
+                throw std::invalid_argument(
+                    "--queue-capacity storage size is too large");
+            }
+
+            config.queue_capacity = static_cast<std::size_t>(capacity);
         } else if (option == "--rx-cpu0" ||
                    option == "--rx-cpu1" ||
-                   option == "--main-cpu") {
+                   option == "--main-cpu"||
+                   option == "--downstream-cpu") {
             const auto cpu = parse_unsigned(value, option);
             
             if (cpu >= static_cast<std::uint64_t>(CPU_SETSIZE)) {
@@ -120,8 +147,10 @@ ReceiverConfig parse_argument(int argc, char* argv[]) {
                 config.rx_cpus[0] = logical_cpu;
             } else if (option == "--rx-cpu1") {
                 config.rx_cpus[1] = logical_cpu;
-            } else {
+            } else if (option == "--main-cpu") {
                 config.main_cpu = logical_cpu;
+            } else {
+                config.downstream_cpu = logical_cpu;
             }
 
         } else {
@@ -165,7 +194,9 @@ const char* stop_reason_name(udp_ingestion::ReceiveStopReason reason) {
 
 void print_result(std::size_t channel,
                     const udp_ingestion::ReceiveWorkerConfig& config,
-                    const udp_ingestion::ReceiveWorkerResult& result) {
+                    const udp_ingestion::ReceiveWorkerResult& result,
+                    const udp_ingestion::ProducerStats& producer,
+                    const udp_ingestion::DownstreamState& downstream) {
     const auto& state = result.state;
 
     std::cout
@@ -181,7 +212,10 @@ void print_result(std::size_t channel,
         << "\nlate_or_duplicate=" << state.late_or_duplicate_packets
         << "\nexpected_sequence=" << state.expected_sequence
         << "\nsequence_exhausted=" << state.sequence_exhausted
-        << "\nchecksum=" << state.checksum
+        << "\nenqueued=" << producer.enqueued_packets
+        << "\nqueue_full_drops=" << producer.queue_full_drops
+        << "\nprocessed=" << downstream.processed_packets
+        << "\nchecksum=" << downstream.checksum
         << '\n';
 }
 
@@ -206,6 +240,12 @@ void print_affinity_request(const std::string& role,
 }
 
 int run_receiver(const ReceiverConfig& config) {
+    static_assert(kChannelCount == udp_ingestion::kPipelineChannelCount,
+                  "Receiver and pipeline channel counts must match");
+
+    udp_ingestion::Pipeline pipeline(config.queue_capacity);
+    udp_ingestion::StartupGate startup(kChannelCount + 1); // 2 RX, 1 downstream
+
     const std::array<udp_ingestion::ReceiveWorkerConfig, kChannelCount>
         worker_configs{
             make_worker_config(config, 0),
@@ -217,15 +257,24 @@ int run_receiver(const ReceiverConfig& config) {
         udp_ingestion::ReceiveWorker(worker_configs[1])
     };
 
+    udp_ingestion::DownstreamWorker downstream(pipeline, config.downstream_cpu);
+
     std::atomic<bool> stop_requested{false};
 
     std::array<udp_ingestion::ReceiveWorkerResult, kChannelCount> results {};
+    udp_ingestion::DownstreamResult downstream_results{};
+
     std::array<std::exception_ptr, kChannelCount> errors{};
+    std::exception_ptr downstream_error;
+    std::exception_ptr coordinator_error;
+
     std::array<std::thread, kChannelCount> threads{};
+    std::thread downstream_thread;
 
     print_affinity_request("main", config.main_cpu);
     print_affinity_request("RX worker 0", worker_configs[0].cpu);
     print_affinity_request("RX worker 1", worker_configs[1].cpu);
+    print_affinity_request("downstream", config.downstream_cpu);
 
     // sockets are bound. RX threads start
     std::cout 
@@ -233,18 +282,35 @@ int run_receiver(const ReceiverConfig& config) {
         << ":" << worker_configs[0].port
         << " and " << config.bind_address
         << ":" << worker_configs[1].port
-        << "\nstarting RX worker threads"
-        << " (idle timeout " << config.idle_timeout.count() << "ms)."
-        << std::endl;
+        << "\nqueue_capacity=" << config.queue_capacity
+        << " per channel"
+        << "\nidle_timeout_ms=" << config.idle_timeout.count()
+        << '\n';
 
+    bool startup_released = false;
+    // create RX threads and downstream thread;
+    // each thread sets up cpu affinity and wait for release.
+    // when they are ready release them to start their drain loops.
     try {
+        downstream_thread = std::thread([&](){
+            try {
+                downstream_results = downstream.run(startup);
+            } catch (...) {
+                downstream_error = std::current_exception();
+                stop_requested.store(true, std::memory_order_relaxed);
+                // startup.cancel();
+            }
+        });
+
         for (std::size_t i = 0; i < kChannelCount; ++i) {
             threads[i] = std::thread([&, i](){
                 try {
-                    results[i] = workers[i].run(stop_requested);
+                    results[i] = workers[i].run(
+                            stop_requested, pipeline.channels[i], startup);
                 } catch(...) {
                     errors[i] = std::current_exception();
                     stop_requested.store(true, std::memory_order_relaxed);
+                    // startup.cancel();
                 }
             });
         }
@@ -254,41 +320,108 @@ int run_receiver(const ReceiverConfig& config) {
             udp_ingestion::pin_current_thread(*config.main_cpu, "main");
         }
 
-    } catch (...) {
-        stop_requested.store(true, std::memory_order_relaxed);
-        for (auto& thread : threads) {
-            if (thread.joinable()) {
-                thread.join();
+        if (startup.wait_until_ready()) {
+            std::cout << "READY\n" << std::flush;
+
+            if (!std::cout) {
+                throw std::runtime_error("failed to write READY");
             }
+            startup.release();
+            startup_released = true;
         }
-        throw;
-    }
-    // threads are started successfully
-    for (auto& thread : threads) {
-        thread.join();
+
+    } catch (...) {
+        coordinator_error = std::current_exception();
     }
 
-    bool success = true;
+    if (!startup_released) {
+        // stop_requested.store(true, std::memory_order_relaxed);
+        startup.cancel();
+
+        for (std::size_t i = 0; i <kChannelCount; ++i) {
+            if (!threads[i].joinable()) {
+                pipeline.channels[i].mark_producer_done();
+            }
+        }
+    }
+    
+    for (auto& thread : threads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+
+    if (downstream_thread.joinable()) {
+        downstream_thread.join();
+    }
+
+    const auto report_error = [](
+        const std::string& role, const std::exception_ptr& error) {
+        if (!error) {
+            return false;
+        }
+
+        try {
+            std::rethrow_exception(error);
+        } catch (const std::exception& exception) {
+            std::cerr << role << " error: " << exception.what() << '\n';
+        } catch (...) {
+            std::cerr << role << " error: unknown exception\n";
+        }
+        return true;
+    };
+
+    bool failed = false;
+    
+    /*
+        report each thread's error
+    */
+
+    if (report_error("main", coordinator_error)) {
+        failed = true;
+    }
 
     for (std::size_t i = 0; i < kChannelCount; ++i) {
-        if (errors[i]) {
-            success = false;
+        if (report_error("RX " + std::to_string(i), errors[i])) {
+            failed = true;
+        }
+    }
+    
+    if (report_error("downstream", downstream_error)) {
+        failed = true;
+    }
+    
+    if (!startup_released) {
+        std::cerr << "startup cancelled\n";
+        return 1;
+    }
+    
+    if (failed) {
+        return 1;
+    }
+    
+    bool success = true;
+    // report results
+    for (std::size_t i = 0; i < kChannelCount; ++i) {
+        const auto producer = pipeline.channels[i].producer_stats();
+        const auto& processed = downstream_results[i];
 
-            try {
-                std::rethrow_exception(errors[i]);
-            } catch (const std::exception& error) {
-                std::cerr << "channel=" << i
-                          << " error: " << error.what() << '\n';
-            } catch (...) {
-                std::cerr << "channel=" << i
-                          << " error: unknown exception \n";
-            }
+        print_result(
+            i, worker_configs[i], results[i], producer, processed);
 
-            continue;
+        const bool accounting_matches =
+            results[i].state.valid_packets ==
+                producer.enqueued_packets + producer.queue_full_drops
+            && processed.processed_packets == producer.enqueued_packets;
+
+        if (!accounting_matches) {
+            std::cerr << "channel=" << i
+                      << " pipeline accounting mismatch\n";
         }
 
-        print_result(i, worker_configs[i], results[i]);
-        if (!is_clean_result(results[i])) {
+        if (!is_clean_result(results[i])
+            || producer.queue_full_drops != 0
+            || !accounting_matches) {
             success = false;
         }
     }

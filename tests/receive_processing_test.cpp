@@ -238,6 +238,79 @@ void test_signed_price_and_checksum_wrap() {
            "checksum wraps modulo 2^64");
 }
 
+void test_separate_rx_and_downstream() {
+    ChannelState rx_state{};
+    udp_ingestion::DownstreamState downstream_state{};
+
+    auto pbuf = udp_ingestion::encode_protocol_v1(make_message(1));
+    MarketDataMessage decoded{};
+
+    const bool first_valid = udp_ingestion::decode_and_track_datagram(
+        pbuf.data(), pbuf.size(), decoded, rx_state);
+
+    expect(first_valid, "RX accepts the first valid datagram");
+    expect(rx_state.received_packets == 1 && rx_state.valid_packets == 1,
+           "RX updates receive counters");
+    expect(rx_state.expected_sequence == 2,
+           "RX updates sequence state");
+    expect(rx_state.checksum == 0,
+           "RX-only processing does not accumulate checksum");
+    expect(downstream_state.processed_packets == 0 &&
+               downstream_state.checksum == 0,
+           "RX processing leaves downstream state untouched");
+
+    if (first_valid) {
+        udp_ingestion::process_downstream_message(decoded, downstream_state);
+    }
+
+    expect(downstream_state.processed_packets == 1,
+           "downstream counts a processed event");
+    expect(downstream_state.checksum == 10'018,
+           "downstream performs deterministic accumulation");
+    expect(rx_state.valid_packets == 1 && rx_state.expected_sequence == 2,
+           "downstream does not repeat RX sequence accounting");
+
+    pbuf = udp_ingestion::encode_protocol_v1(make_message(2));
+
+    const bool invalid_accepted = udp_ingestion::decode_and_track_datagram(
+        pbuf.data(), pbuf.size() - 1, decoded, rx_state);
+
+    expect(!invalid_accepted, "RX rejects a short datagram");
+
+    if (invalid_accepted) {
+        udp_ingestion::process_downstream_message(decoded, downstream_state);
+    }
+
+    expect(rx_state.received_packets == 2 &&
+               rx_state.valid_packets == 1 &&
+               rx_state.invalid_packets == 1,
+           "invalid input is accounted for only at RX");
+    expect(rx_state.expected_sequence == 2,
+           "invalid input leaves sequence unchanged");
+    expect(downstream_state.processed_packets == 1 &&
+               downstream_state.checksum == 10'018,
+           "invalid input is not processed downstream");
+
+    const bool second_valid = udp_ingestion::decode_and_track_datagram(
+        pbuf.data(), pbuf.size(), decoded, rx_state);
+
+    expect(second_valid, "RX accepts the next valid datagram");
+
+    if (second_valid) {
+        udp_ingestion::process_downstream_message(decoded, downstream_state);
+    }
+
+    expect(rx_state.received_packets == 3 &&
+               rx_state.valid_packets == 2 &&
+               rx_state.expected_sequence == 3,
+           "RX resumes normal sequence tracking");
+    expect(downstream_state.processed_packets == 2 &&
+               downstream_state.checksum == 20'037,
+           "separated processing preserves the original checksum");
+    expect(rx_state.checksum == 0,
+           "staged RX checksum remains untouched");
+}
+
 } // namespace
 
 int main() {
@@ -247,6 +320,7 @@ int main() {
     test_independent_channels();
     test_sequence_exhaustion();
     test_signed_price_and_checksum_wrap();
+    test_separate_rx_and_downstream();
 
     if (failures != 0) {
         std::cerr << failures << " test assertion(s) failed\n";

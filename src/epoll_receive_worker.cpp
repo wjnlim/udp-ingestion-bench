@@ -1,5 +1,6 @@
 #include "udp_ingestion/epoll_receive_worker.hpp"
 #include "udp_ingestion/cpu_affinity.hpp"
+#include "udp_ingestion/timestamped_receive.hpp"
 
 #include <arpa/inet.h>
 #include <sys/epoll.h>
@@ -17,9 +18,12 @@ namespace udp_ingestion {
 
 namespace {
 constexpr std::size_t kReceiveAttemptBudget = 64;
+constexpr std::uint32_t kStopEventId = 
+                            static_cast<std::uint32_t>(kEpollChannelCount);
 } // namespace
 
-EpollReceiveWorker::EpollReceiveWorker(const EpollReceiveWorkerConfig& config)
+EpollReceiveWorker::EpollReceiveWorker(const EpollReceiveWorkerConfig& config,
+                                        const StopEvent& stop_event)
     : config_(config) {
 
     if (config_.base_port == 0 || config_.base_port > 65534) {
@@ -50,6 +54,17 @@ EpollReceiveWorker::EpollReceiveWorker(const EpollReceiveWorkerConfig& config)
                 error, std::generic_category(), "epoll_create1");
         }
 
+        epoll_event stop_notification{};
+        stop_notification.events = EPOLLIN;
+        stop_notification.data.u32 = kStopEventId;
+
+        if (::epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, 
+                        stop_event.get_fd(), &stop_notification) != 0) {
+            const int error = errno;
+            throw std::system_error(error, std::generic_category(),
+                                    "epoll_ctl ADD for stop event");
+        }
+
         for (std::size_t i = 0; i < kEpollChannelCount; ++i) {
             auto& channel = channels_[i];
 
@@ -74,6 +89,8 @@ EpollReceiveWorker::EpollReceiveWorker(const EpollReceiveWorkerConfig& config)
                     error, std::generic_category(),
                     "socket for channel " + std::to_string(i));
             }
+
+            enable_rx_timestamp(channel.fd);
 
             if (::bind(channel.fd, reinterpret_cast<const sockaddr*>(&address),
                             sizeof(address)) != 0) {
@@ -102,6 +119,7 @@ EpollReceiveWorker::EpollReceiveWorker(const EpollReceiveWorkerConfig& config)
             }
 
             channel.active = true;
+            ++active_channel_count_;
         }
     } catch (...) {
         close_descriptors();
@@ -126,10 +144,12 @@ void EpollReceiveWorker::close_descriptors() noexcept {
         }
         channel.active = false;
     }
+    active_channel_count_ = 0;
 }
 
 void EpollReceiveWorker::finish_channel(
-    std::size_t channel_idx, ReceiveStopReason reason) {
+    std::size_t channel_idx, ReceiveStopReason reason,
+                                    PipelineChannel& output) {
     auto& channel = channels_[channel_idx];
 
     if (!channel.active) {
@@ -144,20 +164,24 @@ void EpollReceiveWorker::finish_channel(
     }
 
     channel.active = false;
+    --active_channel_count_;
     channel.result.stop_reason = reason;
+    output.mark_producer_done();
 }
 
 bool EpollReceiveWorker::has_active_channels() const {
-    for (const auto& channel : channels_) {
-        if (channel.active) {
-            return true;
-        }
-    }
+    // for (const auto& channel : channels_) {
+    //     if (channel.active) {
+    //         return true;
+    //     }
+    // }
 
-    return false;
+    // return false;
+    return active_channel_count_ != 0;
 }
 
-void EpollReceiveWorker::expire_idle_channels(SteadyClock::time_point now) {
+void EpollReceiveWorker::expire_idle_channels(SteadyClock::time_point now,
+                                                          Pipeline& output) {
     for (std::size_t i = 0; i < kEpollChannelCount; ++i) {
         const auto& channel = channels_[i];
 
@@ -166,7 +190,7 @@ void EpollReceiveWorker::expire_idle_channels(SteadyClock::time_point now) {
         }
 
         if (now - channel.last_receive >= config_.idle_timeout) {
-            finish_channel(i, ReceiveStopReason::IdleTimeout);
+            finish_channel(i, ReceiveStopReason::IdleTimeout, output.channels[i]);
         }
     }
 }
@@ -201,7 +225,8 @@ int EpollReceiveWorker::wait_timeout_ms(SteadyClock::time_point now) const {
     return static_cast<int>(timeout.count());
 }
 
-void EpollReceiveWorker::receive_ready_channel(std::size_t channel_idx) {
+void EpollReceiveWorker::receive_ready_channel(std::size_t channel_idx,
+                                                PipelineChannel& output) {
     auto& channel = channels_[channel_idx];
 
     if (!channel.active) {
@@ -209,18 +234,30 @@ void EpollReceiveWorker::receive_ready_channel(std::size_t channel_idx) {
     }
 
     // One extra byte for detecting oversized datagrams
-    std::array<std::uint8_t, kProtocolV1BufSize+1> buffer{};
+    // std::array<std::uint8_t, kProtocolV1BufSize+1> buffer{};
+    ReceivedDatagram datagram{};
+    PipelineEvent event{};
 
     for (std::size_t i = 0; i < kReceiveAttemptBudget; ++i) {
-        const auto size = ::recv(channel.fd, buffer.data(), buffer.size(), 0);
+        // const auto size = ::recv(channel.fd, buffer.data(), buffer.size(), 0);
+        const auto size = receive_timestamped_datagram(channel.fd, datagram);
 
         if (size >= 0) {
             channel.last_receive = SteadyClock::now();
 
-            process_datagram(buffer.data(), static_cast<std::size_t>(size),
-                                                        channel.result.state);
+            // process_datagram(buffer.data(), static_cast<std::size_t>(size),
+            //                                             channel.result.state);
+            if (decode_and_track_datagram(datagram.payload.data(),
+                                        static_cast<std::size_t>(size),
+                                        event.message,
+                                        channel.result.state)) {
+                event.rx_timestamp_ns = datagram.rx_timestamp_ns;
+                output.try_enqueue(event);
+            }
+
             if (channel.result.state.received_packets >= channel.expected_packets) {
-                finish_channel(channel_idx, ReceiveStopReason::CountReached);
+                finish_channel(channel_idx, 
+                        ReceiveStopReason::CountReached, output);
                 return;
             }
 
@@ -236,104 +273,156 @@ void EpollReceiveWorker::receive_ready_channel(std::size_t channel_idx) {
         }
 
         throw std::system_error(error, std::generic_category(), 
-                                "recv for channel " + std::to_string(channel_idx));
+                            "recvmsg for channel " + std::to_string(channel_idx));
     }
 }
 
-EpollReceiveResult EpollReceiveWorker::run() {
+void EpollReceiveWorker::apply_cpu_affinity() {
     if (config_.cpu.has_value()) {
         pin_current_thread(*config_.cpu, "epoll RX");
     }
+}
 
-    const auto start = SteadyClock::now();
+EpollReceiveResult EpollReceiveWorker::run(Pipeline& output) {
+    try {
+        // if (config_.cpu.has_value()) {
+        //     pin_current_thread(*config_.cpu, "epoll RX");
+        // }
 
-    for (auto& channel : channels_) {
-        if (channel.active) {
-            channel.last_receive = start;
+        const auto start = SteadyClock::now();
+
+        // for (auto& channel : channels_) {
+        //     if (channel.active) {
+        //         channel.last_receive = start;
+        //     }
+        // }
+        for (std::size_t i = 0; i < kEpollChannelCount; ++i) {
+            if (channels_[i].active) {
+                channels_[i].last_receive = start;
+            } else {
+                output.channels[i].mark_producer_done();
+            }
         }
-    }
+        // +1 for stop event fd
+        std::array<epoll_event, kEpollChannelCount+1> events{};
 
-    std::array<epoll_event, kEpollChannelCount> events{};
+        while (has_active_channels()) {
+            const int timeout = wait_timeout_ms(SteadyClock::now());
 
-    while (has_active_channels()) {
-        const int timeout = wait_timeout_ms(SteadyClock::now());
-
-        const int ready = ::epoll_wait(epoll_fd_, events.data(),
-                            static_cast<int>(events.size()), timeout);
-        if (ready < 0) {
-            const int error = errno;
-            if (error == EINTR) {
-                expire_idle_channels(SteadyClock::now());
-                continue;
-            }
-
-            throw std::system_error(error, std::generic_category(), "epoll_wait");
-        }
-
-        for (int i = 0; i < ready; ++i) {
-            const auto& event = events[i];
-            const auto channel_idx = static_cast<std::size_t>(event.data.u32);
-
-            if (channel_idx >= channels_.size()) {
-                throw std::runtime_error("epoll returned an invalid channel index");
-            }
-
-            const auto& channel = channels_[channel_idx];
-
-            if (!channel.active) {
-                continue;
-            }
-
-            if ((event.events & EPOLLERR) != 0) {
-                int socket_error = 0;
-                socklen_t error_size = sizeof(socket_error);
-
-                if (::getsockopt(channel.fd, SOL_SOCKET, SO_ERROR,
-                                    &socket_error, &error_size) != 0) {
-                    const int error = errno;
-                    throw std::system_error(
-                        error, std::generic_category(),
-                        "getsockopt SO_ERROR for channel " +
-                        std::to_string(channel_idx));
+            const int ready = ::epoll_wait(epoll_fd_, events.data(),
+                                static_cast<int>(events.size()), timeout);
+            if (ready < 0) {
+                const int error = errno;
+                if (error == EINTR) {
+                    expire_idle_channels(SteadyClock::now(), output);
+                    continue;
                 }
 
-                if (socket_error != 0) {
-                    throw std::system_error(socket_error, std::generic_category(),
-                        "socket error for channel " +
+                throw std::system_error(error, std::generic_category(), "epoll_wait");
+            }
+
+            bool stop_requested = false;
+
+            for (int i = 0; i < ready; ++i) {
+                const auto& event = events[i];
+                
+                // Check stop event
+                if (event.data.u32 == kStopEventId) {
+                    if ((event.events & (EPOLLERR | EPOLLHUP)) != 0) {
+                        throw std::runtime_error(
+                            "unexpected error on stop event");
+                    }
+
+                    if ((event.events & EPOLLIN) != 0) {
+                        stop_requested = true;
+
+                        for (std::size_t channel_idx = 0;
+                             channel_idx < kEpollChannelCount;
+                             ++channel_idx) {
+                            finish_channel(channel_idx,
+                                ReceiveStopReason::StopRequested,
+                                output.channels[channel_idx]);
+                        }
+
+                        break;
+                    }
+
+                    continue;
+                }
+
+
+                const auto channel_idx = static_cast<std::size_t>(event.data.u32);
+
+                if (channel_idx >= channels_.size()) {
+                    throw std::runtime_error("epoll returned an invalid channel index");
+                }
+
+                const auto& channel = channels_[channel_idx];
+
+                if (!channel.active) {
+                    continue;
+                }
+
+                if ((event.events & EPOLLERR) != 0) {
+                    int socket_error = 0;
+                    socklen_t error_size = sizeof(socket_error);
+
+                    if (::getsockopt(channel.fd, SOL_SOCKET, SO_ERROR,
+                                        &socket_error, &error_size) != 0) {
+                        const int error = errno;
+                        throw std::system_error(
+                            error, std::generic_category(),
+                            "getsockopt SO_ERROR for channel " +
+                            std::to_string(channel_idx));
+                    }
+
+                    if (socket_error != 0) {
+                        throw std::system_error(socket_error, std::generic_category(),
+                            "socket error for channel " +
+                                std::to_string(channel_idx));
+                    }
+
+                    throw std::runtime_error(
+                        "EPOLLERR without SO_ERROR for channel " +
                             std::to_string(channel_idx));
                 }
 
-                throw std::runtime_error(
-                    "EPOLLERR without SO_ERROR for channel " +
-                        std::to_string(channel_idx));
-            }
+                if ((event.events & EPOLLHUP) != 0) {
+                    throw std::runtime_error(
+                        "unexpected EPOLLHUP for UDP channel " +
+                            std::to_string(channel_idx));
+                }
 
-            if ((event.events & EPOLLHUP) != 0) {
-                throw std::runtime_error(
-                    "unexpected EPOLLHUP for UDP channel " +
-                        std::to_string(channel_idx));
+                if ((event.events & EPOLLIN) != 0) {
+                    receive_ready_channel(channel_idx, output.channels[channel_idx]);
+                }
+            } // ready list loop
+            if (stop_requested) {
+                break;
             }
+            expire_idle_channels(SteadyClock::now(), output);
+        } // epoll wait loop
 
-            if ((event.events & EPOLLIN) != 0) {
-                receive_ready_channel(channel_idx);
-            }
+        EpollReceiveResult results{};
+        for (std::size_t i = 0; i < kEpollChannelCount; ++i) {
+            const auto& channel = channels_[i];
+
+            results[i] = EpollChannelResult{
+                channel.port,
+                channel.expected_packets,
+                channel.result
+            };
         }
 
-        expire_idle_channels(SteadyClock::now());
+        return results;
+
+    } catch (...) {
+        for (auto& channel : output.channels) {
+            channel.mark_producer_done();
+        }
+        throw;
     }
-
-    EpollReceiveResult results{};
-    for (std::size_t i = 0; i < kEpollChannelCount; ++i) {
-        const auto& channel = channels_[i];
-
-        results[i] = EpollChannelResult{
-            channel.port,
-            channel.expected_packets,
-            channel.result
-        };
-    }
-
-    return results;
+    
 }
 
 }// namespace udp_ingestion

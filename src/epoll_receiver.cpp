@@ -1,4 +1,8 @@
 #include "udp_ingestion/epoll_receive_worker.hpp"
+#include "udp_ingestion/pipeline.hpp"
+#include "udp_ingestion/downstream_worker.hpp"
+#include "udp_ingestion/startup_gate.hpp"
+#include "udp_ingestion/stop_event.hpp"
 
 #include <sched.h>
 
@@ -12,28 +16,44 @@
 #include <string_view>
 #include <system_error>
 #include <exception>
+#include <cstddef>
+#include <limits>
+#include <optional>
+#include <thread>
 
 namespace {
 
+struct ReceiverConfig {
+    udp_ingestion::EpollReceiveWorkerConfig rx;
+    std::size_t queue_capacity = 4096;
+    std::optional<int> downstream_cpu;
+};
+
 void print_usage(const char* program) {
-    const udp_ingestion::EpollReceiveWorkerConfig defaults{};
+    const ReceiverConfig defaults{};
+    const auto& rx = defaults.rx;
 
     std::cout
         << "Usage: " << program
         << " [--bind-address IPv4] [--base-port PORT]"
            " [--count DATAGRAMS] [--idle-timeout-ms MS]"
-           " [--rx-cpu N]\n"
+           " [--queue-capacity N]"
+           " [--rx-cpu N] [--downstream-cpu N]\n"
         << "  One event-loop execution context handles both UDP channels.\n"
         << "  --count is the aggregate expected datagram count.\n"
         << "  --idle-timeout-ms must be in [1, 86400000].\n"
+        << "  --queue-capacity is the slot count per channel;"
+           " it must be a positive power of two.\n"
         << "  --rx-cpu selects a Linux logical CPU for the event loop.\n"
-        << "  Omitted --rx-cpu preserves inherited affinity.\n"
-        << "  Defaults: " << defaults.bind_address
-        << ", ports " << defaults.base_port
-        << "/" << defaults.base_port + 1
-        << ", count " << defaults.expected_total_packets
-        << ", idle timeout " << defaults.idle_timeout.count()
-        << " ms, no explicit affinity.\n";
+        << "  --downstream-cpu selects a Linux logical CPU for downstream.\n"
+        << "  Omitted CPU options preserve inherited affinity.\n"
+        << "  Defaults: " << rx.bind_address
+        << ", ports " << rx.base_port
+        << "/" << rx.base_port + 1
+        << ", count " << rx.expected_total_packets
+        << ", idle timeout " << rx.idle_timeout.count()
+        << " ms, queue capacity " << defaults.queue_capacity
+        << " per channel, no explicit affinity.\n";
 }
 
 std::uint64_t parse_unsigned(std::string_view val_str, const std::string& option) {
@@ -50,8 +70,10 @@ std::uint64_t parse_unsigned(std::string_view val_str, const std::string& option
     return value;
 }
 
-udp_ingestion::EpollReceiveWorkerConfig parse_argument (int argc, char* argv[]) {
-    udp_ingestion::EpollReceiveWorkerConfig config;
+ReceiverConfig parse_argument (int argc, char* argv[]) {
+    // udp_ingestion::EpollReceiveWorkerConfig config;
+    ReceiverConfig options{};
+    auto& config = options.rx;
 
     for (int i = 1; i < argc; ++i) {
         const std::string option = argv[i];
@@ -94,7 +116,26 @@ udp_ingestion::EpollReceiveWorkerConfig parse_argument (int argc, char* argv[]) 
 
             config.idle_timeout = std::chrono::milliseconds{
                 static_cast<std::chrono::milliseconds::rep>(timeout)};
-        } else if (option == "--rx-cpu") {
+        } else if (option == "--queue-capacity") {
+            const auto capacity = parse_unsigned(value, option);
+
+            if (capacity == 0 || (capacity & (capacity - 1)) != 0) {
+                throw std::invalid_argument(
+                    "--queue-capacity must be a positive power of two");
+            }
+
+            const auto maximum =
+                std::numeric_limits<std::size_t>::max()
+                / sizeof(udp_ingestion::PipelineEvent);
+
+            if (capacity > maximum) {
+                throw std::invalid_argument(
+                    "--queue-capacity storage size is too large");
+            }
+
+            options.queue_capacity = static_cast<std::size_t>(capacity);
+        } else if (option == "--rx-cpu" ||
+                   option == "--downstream-cpu") {
             const auto cpu = parse_unsigned(value, option);
 
             if (cpu >= static_cast<std::uint64_t>(CPU_SETSIZE)) {
@@ -103,13 +144,19 @@ udp_ingestion::EpollReceiveWorkerConfig parse_argument (int argc, char* argv[]) 
                     " is outside the supported CPU set");
             }
 
-            config.cpu = static_cast<int>(cpu);
+            const auto logical_cpu = static_cast<int>(cpu);
+
+            if (option == "--rx-cpu") {
+                config.cpu = logical_cpu;
+            } else {
+                options.downstream_cpu = logical_cpu;
+            }
         } else {
             throw std::invalid_argument("unknown option: " + option);
         }
     }
 
-    return config;
+    return options;
 }
 
 const char* stop_reason_name(udp_ingestion::ReceiveStopReason reason) {
@@ -127,7 +174,9 @@ const char* stop_reason_name(udp_ingestion::ReceiveStopReason reason) {
 
 void print_result(
     std::size_t channel,
-    const udp_ingestion::EpollChannelResult& result) {
+    const udp_ingestion::EpollChannelResult& result,
+    const udp_ingestion::ProducerStats& producer,
+    const udp_ingestion::DownstreamState& downstream) {
     const auto& state = result.result.state;
 
     std::cout
@@ -143,7 +192,10 @@ void print_result(
         << "\nlate_or_duplicate=" << state.late_or_duplicate_packets
         << "\nexpected_sequence=" << state.expected_sequence
         << "\nsequence_exhausted=" << state.sequence_exhausted
-        << "\nchecksum=" << state.checksum
+        << "\nenqueued=" << producer.enqueued_packets
+        << "\nqueue_full_drops=" << producer.queue_full_drops
+        << "\nprocessed=" << downstream.processed_packets
+        << "\nchecksum=" << downstream.checksum
         << '\n';
 }
 
@@ -154,33 +206,169 @@ bool is_clean_result(const udp_ingestion::ReceiveWorkerResult& result) {
         && result.state.late_or_duplicate_packets == 0;
 }
 
-int run_receiver(const udp_ingestion::EpollReceiveWorkerConfig& config) {
-    udp_ingestion::EpollReceiveWorker worker(config);
+int run_receiver(const ReceiverConfig& options) {
+    static_assert(
+        udp_ingestion::kEpollChannelCount == udp_ingestion::kPipelineChannelCount,
+        "Receiver and pipeline channel counts must match");
+    
+    const auto& config = options.rx;
 
-    std::cout << "epoll RX: ";
-    if (config.cpu.has_value()) {
-        std::cout << "requested CPU " << *config.cpu;
-    } else {
-        std::cout << "preserve inherited affinity";
-    }
-    std::cout << '\n';
+    udp_ingestion::Pipeline pipeline(options.queue_capacity);
+    udp_ingestion::StartupGate startup(1); // only downstream
+
+    udp_ingestion::StopEvent stop_event;
+    udp_ingestion::EpollReceiveWorker worker(config, stop_event);
+
+    udp_ingestion::DownstreamWorker downstream(
+                                pipeline, options.downstream_cpu);
+
+    udp_ingestion::EpollReceiveResult results{};
+    udp_ingestion::DownstreamResult downstream_results{};
+
+    std::exception_ptr coordinator_error;
+    std::exception_ptr downstream_error;
+    std::thread downstream_thread;
+
+    const auto print_affinity_request = [](
+        const std::string& role, const std::optional<int>& cpu) {
+        std::cout << role << ": ";
+
+        if (cpu.has_value()) {
+            std::cout << "requested CPU " << *cpu;
+        } else {
+            std::cout << "preserve inherited affinity";
+        }
+
+        std::cout << '\n';
+    };
+
+    print_affinity_request("epoll RX", config.cpu);
+    print_affinity_request("downstream", options.downstream_cpu);
 
     std::cout
         << "Bound " << config.bind_address
         << ":" << config.base_port
         << " and " << config.bind_address
         << ":" << config.base_port + 1
-        << "\nstarting LT epoll loop on the main thread"
-        << " (idle timeout " << config.idle_timeout.count() << " ms)."
-        << std::endl;
+        << "\nqueue_capacity=" << options.queue_capacity
+        << " per channel"
+        << "\nidle_timeout_ms=" << config.idle_timeout.count()
+        << '\n';
+    
+    bool startup_released = false;
+    // create downstream thread;
+    // it sets up cpu affinity and wait for release.
+    // when it is ready release it to start its drain loops and
+    // start RX loop (worker) in the main thread
+    try {
+        downstream_thread = std::thread([&](){
+            try {
+                downstream_results = downstream.run(startup);
+            } catch (...) {
+                downstream_error = std::current_exception();
 
-    const auto results = worker.run();
+                // wake up main RX if it has entered epoll_wait().
+                try {
+                    stop_event.notify();
+                } catch (...) {
+                    // If stop mechanism itself failed,
+                    // cannot guarantee RX termination; thus terminate
+                    std::terminate();
+                }
+            }
+        });
+
+        worker.apply_cpu_affinity();
+
+        if (startup.wait_until_ready()) {
+            std::cout << "READY\n" << std::flush;
+
+            if (!std::cout) {
+                throw std::runtime_error("failed to write READY");
+            }
+
+            startup.release();
+            startup_released = true;
+
+            // Main is the RX execution context.
+            results = worker.run(pipeline);
+        }
+    } catch (...) {
+        coordinator_error = std::current_exception();
+    }
+
+    if (!startup_released) {
+        startup.cancel();
+    }
+
+    for (auto& channel : pipeline.channels) {
+        channel.mark_producer_done();
+    }
+
+    if (downstream_thread.joinable()) {
+        downstream_thread.join();
+    }
+
+    const auto report_error = [](
+        const std::string& role, const std::exception_ptr& error) {
+        if (!error) {
+            return false;
+        }
+
+        try {
+            std::rethrow_exception(error);
+        } catch (const std::exception& exception) {
+            std::cerr << role << " error: " << exception.what() << '\n';
+        } catch (...) {
+            std::cerr << role << " error: unknown exception\n";
+        }
+
+        return true;
+    };
+
+    bool failed = false;
+    /*
+        report each thread's error
+    */
+
+    if (report_error("epoll RX/main", coordinator_error)) {
+        failed = true;
+    }
+
+    if (report_error("downstream", downstream_error)) {
+        failed = true;
+    }
+
+    if (!startup_released) {
+        std::cerr << "startup cancelled\n";
+        return 1;
+    }
+
+    if (failed) {
+        return 1;
+    }
 
     bool success = true;
+    // report results
     for (std::size_t i = 0; i < udp_ingestion::kEpollChannelCount; ++i) {
-        print_result(i, results[i]);
+        const auto producer = pipeline.channels[i].producer_stats();
+        const auto& processed = downstream_results[i];
 
-        if (!is_clean_result(results[i].result)) {
+        print_result(i, results[i], producer, processed);
+
+        const bool accounting_matches =
+            results[i].result.state.valid_packets ==
+                producer.enqueued_packets + producer.queue_full_drops
+            && processed.processed_packets == producer.enqueued_packets;
+
+        if (!accounting_matches) {
+            std::cerr << "channel=" << i
+                      << " pipeline accounting mismatch\n";
+        }
+
+        if (!is_clean_result(results[i].result)
+            || producer.queue_full_drops != 0
+            || !accounting_matches) {
             success = false;
         }
     }

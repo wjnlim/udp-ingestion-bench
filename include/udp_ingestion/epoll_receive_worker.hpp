@@ -1,6 +1,8 @@
 #pragma once
 
 #include "udp_ingestion/receive_worker.hpp"
+#include "udp_ingestion/pipeline.hpp"
+#include "udp_ingestion/stop_event.hpp"
 
 #include <array>
 #include <chrono>
@@ -37,14 +39,17 @@ using EpollReceiveResult =
 
 class EpollReceiveWorker {
 public:
-    explicit EpollReceiveWorker(const EpollReceiveWorkerConfig& config);
+    // explicit EpollReceiveWorker(const EpollReceiveWorkerConfig& config);
+    EpollReceiveWorker(const EpollReceiveWorkerConfig& config,
+                       const StopEvent& stop_event);
     ~EpollReceiveWorker();
 
     EpollReceiveWorker(const EpollReceiveWorker&) = delete;
     EpollReceiveWorker& operator=(const EpollReceiveWorker&) = delete;
 
+    void apply_cpu_affinity();
     // Runs polling loop on the calling thread; does not create a thread.
-    EpollReceiveResult run();
+    EpollReceiveResult run(Pipeline& output);
 
 private:
     using SteadyClock = std::chrono::steady_clock;
@@ -59,15 +64,20 @@ private:
     };
 
     void close_descriptors() noexcept;
-    void finish_channel(std::size_t channel_idx, ReceiveStopReason reason);
+    void finish_channel(std::size_t channel_idx, 
+                        ReceiveStopReason reason,
+                        PipelineChannel& output);
     bool has_active_channels() const;
-    void expire_idle_channels(SteadyClock::time_point now);
+    void expire_idle_channels(SteadyClock::time_point now,
+                              Pipeline& output);
     int wait_timeout_ms(SteadyClock::time_point now) const;
-    void receive_ready_channel(std::size_t channel_idx);
+    void receive_ready_channel(std::size_t channel_idx,
+                               PipelineChannel& output);
 
     EpollReceiveWorkerConfig config_;
     int epoll_fd_ = -1;
     std::array<Channel, kEpollChannelCount> channels_{};
+    std::size_t active_channel_count_ = 0;
 };
 
 } // namespace udp_ingestion

@@ -23,8 +23,23 @@ struct ChannelState {
     // number of (Received seq < Expected seq) packets
     std::uint64_t late_or_duplicate_packets = 0;
 
+    // Temporary compatibility field for the existing non-staged callers.
+    // The staged RX path does not update this field.
     std::uint64_t checksum = 0;
 };
+
+struct DownstreamState {
+    std::uint64_t processed_packets = 0;
+    std::uint64_t checksum = 0;
+};
+
+// Counts and decodes a datagram, then updates RX sequence statistics.
+bool decode_and_track_datagram(const std::uint8_t* data, std::size_t size,
+            MarketDataMessage& message, ChannelState& state);
+
+// Updates only downstream-owned processing state.
+void process_downstream_message(const MarketDataMessage& message,
+                                            DownstreamState& state);
 
 // Processes an already decoded message
 void process_message(const MarketDataMessage& message, ChannelState& state);

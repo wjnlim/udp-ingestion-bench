@@ -1,6 +1,8 @@
 #pragma once
 
 #include "udp_ingestion/receive_processing.hpp"
+#include "udp_ingestion/pipeline.hpp"
+#include "udp_ingestion/startup_gate.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -46,7 +48,9 @@ public:
     ReceiveWorker& operator=(const ReceiveWorker&) = delete;
 
     // Receive loop
-    ReceiveWorkerResult run(const std::atomic<bool>& stop_requested);
+    ReceiveWorkerResult run(const std::atomic<bool>& stop_requested,
+                            PipelineChannel& output,
+                            StartupGate& startup);
 
 private:
     ReceiveWorkerConfig config_;

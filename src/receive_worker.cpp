@@ -1,11 +1,12 @@
 #include "udp_ingestion/receive_worker.hpp"
 #include "udp_ingestion/cpu_affinity.hpp"
+#include "udp_ingestion/timestamped_receive.hpp"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include <array>
+// #include <array>
 #include <cerrno>
 #include <stdexcept>
 #include <system_error>
@@ -45,6 +46,8 @@ ReceiveWorker::ReceiveWorker(const ReceiveWorkerConfig& config) : config_(config
     }
 
     try {
+        enable_rx_timestamp(fd);
+
         if (::bind(fd, reinterpret_cast<const sockaddr*>(&address),
                                                     sizeof(address)) != 0) {
             throw std::system_error(errno, std::generic_category(), "bind");
@@ -62,48 +65,75 @@ ReceiveWorker::~ReceiveWorker() {
     }
 }
 
-ReceiveWorkerResult ReceiveWorker::run(const std::atomic<bool>& stop_requested) {
-    if (config_.cpu.has_value()) {
-        pin_current_thread(*config_.cpu, 
+ReceiveWorkerResult ReceiveWorker::run(const std::atomic<bool>& stop_requested,
+                                                        PipelineChannel& output,
+                                                        StartupGate& startup) {
+    try {
+        if (config_.cpu.has_value()) {
+            pin_current_thread(*config_.cpu, 
                     "RX worker on port " + std::to_string(config_.port));
-    }
-    
-    ReceiveWorkerResult result{};
-    // one extra byte for detecting oversized datagrams.
-    std::array<std::uint8_t, kProtocolV1BufSize + 1> buffer{};
+        }
+        
+        ReceiveWorkerResult result{};
+        // one extra byte for detecting oversized datagrams.
+        // std::array<std::uint8_t, kProtocolV1BufSize + 1> buffer{};
+        ReceivedDatagram datagram{};
+        PipelineEvent event{};
 
-    auto last_receive = std::chrono::steady_clock::now();
-
-    while (result.state.received_packets < config_.expected_packets) {
-        if (stop_requested.load(std::memory_order_relaxed)) {
+        if (!startup.arrive_and_wait()) {
             result.stop_reason = ReceiveStopReason::StopRequested;
+            output.mark_producer_done();
             return result;
         }
 
-        const auto size = ::recv(fd, buffer.data(), buffer.size(), 0);
+        auto last_receive = std::chrono::steady_clock::now();
 
-        if (size >= 0) {
-            last_receive = std::chrono::steady_clock::now();
+        while (result.state.received_packets < config_.expected_packets) {
+            if (stop_requested.load(std::memory_order_relaxed)) {
+                result.stop_reason = ReceiveStopReason::StopRequested;
+                break;
+            }
 
-            process_datagram(buffer.data(), static_cast<std::size_t>(size), 
-                                                                result.state);
-            continue;
+            // const auto size = ::recv(fd, buffer.data(), buffer.size(), 0);
+            const auto size = receive_timestamped_datagram(fd, datagram);
+
+            if (size >= 0) {
+                last_receive = std::chrono::steady_clock::now();
+
+                // process_datagram(buffer.data(), static_cast<std::size_t>(size), 
+                //                                                     result.state);
+                if (decode_and_track_datagram(datagram.payload.data(), 
+                                              static_cast<std::size_t>(size),
+                                              event.message,
+                                              result.state)) {
+                    event.rx_timestamp_ns = datagram.rx_timestamp_ns;
+                    output.try_enqueue(event);
+                }
+                continue;
+            }
+
+            const int receive_error = errno;
+            if (receive_error != EAGAIN && receive_error != EWOULDBLOCK
+                                                && receive_error != EINTR) {
+                throw std::system_error(receive_error, std::generic_category(), 
+                                                                    "recvmsg");
+            }
+
+            if (std::chrono::steady_clock::now() - last_receive >= config_.idle_timeout) {
+                result.stop_reason = ReceiveStopReason::IdleTimeout;
+                break;
+            }
         }
 
-        const int receive_error = errno;
-        if (receive_error != EAGAIN && receive_error != EWOULDBLOCK
-                                            && receive_error != EINTR) {
-            throw std::system_error(receive_error, std::generic_category(), "recv");
-        }
+        // result.stop_reason = ReceiveStopReason::CountReached;
+        output.mark_producer_done();
+        return result;
 
-        if (std::chrono::steady_clock::now() - last_receive >= config_.idle_timeout) {
-            result.stop_reason = ReceiveStopReason::IdleTimeout;
-            return result;    
-        }
+    } catch (...) {
+        output.mark_producer_done();
+        startup.cancel();
+        throw;
     }
-
-    result.stop_reason = ReceiveStopReason::CountReached;
-    return result;
 }
 
 } // namespace udp_ingestion
