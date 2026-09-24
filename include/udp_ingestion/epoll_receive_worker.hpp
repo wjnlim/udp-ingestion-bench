@@ -21,7 +21,7 @@ struct EpollReceiveWorkerConfig {
 
     // Aggregate datagram count across both channels, including invalid input.
     std::uint64_t expected_total_packets = 1'000;
-    
+
     // Per-channel idle timeout, including the initial wait.
     std::chrono::milliseconds idle_timeout{3000};
 
@@ -34,14 +34,11 @@ struct EpollChannelResult {
     ReceiveWorkerResult result{};
 };
 
-using EpollReceiveResult = 
-    std::array<EpollChannelResult, kEpollChannelCount>;
+using EpollReceiveResult = std::array<EpollChannelResult, kEpollChannelCount>;
 
 class EpollReceiveWorker {
 public:
-    // explicit EpollReceiveWorker(const EpollReceiveWorkerConfig& config);
-    EpollReceiveWorker(const EpollReceiveWorkerConfig& config,
-                       const StopEvent& stop_event);
+    EpollReceiveWorker(const EpollReceiveWorkerConfig& config, const StopEvent& stop_event);
     ~EpollReceiveWorker();
 
     EpollReceiveWorker(const EpollReceiveWorker&) = delete;
@@ -64,15 +61,11 @@ private:
     };
 
     void close_descriptors() noexcept;
-    void finish_channel(std::size_t channel_idx, 
-                        ReceiveStopReason reason,
-                        PipelineChannel& output);
+    void finish_channel(std::size_t channel_idx, ReceiveStopReason reason, PipelineChannel& output);
     bool has_active_channels() const;
-    void expire_idle_channels(SteadyClock::time_point now,
-                              Pipeline& output);
+    void expire_idle_channels(SteadyClock::time_point now, Pipeline& output);
     int wait_timeout_ms(SteadyClock::time_point now) const;
-    void receive_ready_channel(std::size_t channel_idx,
-                               PipelineChannel& output);
+    void receive_ready_channel(std::size_t channel_idx, PipelineChannel& output);
 
     EpollReceiveWorkerConfig config_;
     int epoll_fd_ = -1;

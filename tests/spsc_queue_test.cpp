@@ -32,9 +32,8 @@ Payload make_payload(std::uint64_t sequence) {
 }
 
 bool matches(const Payload& value, std::uint64_t sequence) {
-    return value.sequence == sequence
-        && value.inverse == ~sequence
-        && value.doubled == sequence * 2;
+    return value.sequence == sequence && value.inverse == ~sequence &&
+           value.doubled == sequence * 2;
 }
 
 void expect_invalid_capacity(std::size_t capacity) {
@@ -55,8 +54,7 @@ void test_invalid_capacity() {
     expect_invalid_capacity(6);
 
     // A representable power of two whose Payload array size would overflow.
-    const auto largest_power_of_two =
-        std::numeric_limits<std::size_t>::max() / 2 + 1;
+    const auto largest_power_of_two = std::numeric_limits<std::size_t>::max() / 2 + 1;
     expect_invalid_capacity(largest_power_of_two);
 }
 
@@ -88,12 +86,10 @@ void test_full_fifo_and_reuse() {
         const auto first = round * capacity;
 
         for (std::size_t i = 0; i < capacity; ++i) {
-            expect(queue.try_push(make_payload(first + i)),
-                   "all capacity slots are usable");
+            expect(queue.try_push(make_payload(first + i)), "all capacity slots are usable");
         }
 
-        expect(!queue.try_push(make_payload(999999)),
-               "push fails when all slots are occupied");
+        expect(!queue.try_push(make_payload(999999)), "push fails when all slots are occupied");
 
         for (std::size_t i = 0; i < capacity; ++i) {
             expect(queue.try_pop(output), "full queue can be drained");
@@ -150,8 +146,7 @@ void test_failed_push_accounting() {
     std::uint64_t processed = 0;
 
     while (queue.try_pop(output)) {
-        expect(matches(output, processed),
-               "drops do not overwrite accepted events");
+        expect(matches(output, processed), "drops do not overwrite accepted events");
         ++processed;
     }
 
@@ -189,8 +184,7 @@ void test_concurrent_transfer(std::size_t capacity) {
 
     producer.join();
 
-    expect(values_match,
-           "concurrent transfer preserves FIFO and every payload field");
+    expect(values_match, "concurrent transfer preserves FIFO and every payload field");
     expect(!queue.try_pop(output), "concurrent transfer leaves no extra events");
 }
 

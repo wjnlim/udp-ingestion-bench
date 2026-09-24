@@ -41,8 +41,11 @@ enable_project_warnings(receive_processing)
 
 add_executable(dedicated_receiver
     src/dedicated_receiver.cpp
+    src/receiver_reporting.cpp
     src/receive_worker.cpp
     src/downstream_worker.cpp
+    src/run_timing.cpp
+    src/latency.cpp
     src/timestamped_receive.cpp
     src/cpu_affinity.cpp
 )
@@ -53,8 +56,11 @@ enable_project_warnings(dedicated_receiver)
 
 add_executable(epoll_receiver
     src/epoll_receiver.cpp
+    src/receiver_reporting.cpp
     src/epoll_receive_worker.cpp
     src/downstream_worker.cpp
+    src/run_timing.cpp
+    src/latency.cpp
     src/stop_event.cpp
     src/timestamped_receive.cpp
     src/cpu_affinity.cpp
@@ -114,6 +120,8 @@ if(BUILD_TESTING)
     add_executable(downstream_worker_test
         tests/downstream_worker_test.cpp
         src/downstream_worker.cpp
+        src/run_timing.cpp
+        src/latency.cpp
         src/cpu_affinity.cpp
     )
     target_link_libraries(downstream_worker_test
@@ -158,7 +166,7 @@ if(BUILD_TESTING)
 
     add_executable(latency_clock_test
         tests/latency_clock_test.cpp
-        src/latency_clock.cpp
+        src/latency.cpp
     )
     target_include_directories(latency_clock_test PRIVATE include)
     enable_project_warnings(latency_clock_test)
@@ -172,8 +180,7 @@ if(BUILD_TESTING)
 
     add_executable(latency_samples_test
         tests/latency_samples_test.cpp
-        src/latency_samples.cpp
-        src/latency_clock.cpp
+        src/latency.cpp
     )
     target_include_directories(latency_samples_test PRIVATE include)
     enable_project_warnings(latency_samples_test)
@@ -182,6 +189,34 @@ if(BUILD_TESTING)
         COMMAND latency_samples_test
     )
     set_tests_properties(latency_samples_test PROPERTIES
+        TIMEOUT 30
+    )
+
+    add_executable(latency_statistics_test
+        tests/latency_statistics_test.cpp
+        src/latency.cpp
+    )
+    target_include_directories(latency_statistics_test PRIVATE include)
+    enable_project_warnings(latency_statistics_test)
+    add_test(
+        NAME latency_statistics_test
+        COMMAND latency_statistics_test
+    )
+    set_tests_properties(latency_statistics_test PROPERTIES
+        TIMEOUT 30
+    )
+
+    add_executable(run_timing_test
+        tests/run_timing_test.cpp
+        src/run_timing.cpp
+    )
+    target_include_directories(run_timing_test PRIVATE include)
+    enable_project_warnings(run_timing_test)
+    add_test(
+        NAME run_timing_test
+        COMMAND run_timing_test
+    )
+    set_tests_properties(run_timing_test PROPERTIES
         TIMEOUT 30
     )
 

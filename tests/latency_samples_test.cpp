@@ -1,4 +1,4 @@
-#include "udp_ingestion/latency_samples.hpp"
+#include "udp_ingestion/latency.hpp"
 
 #include <exception>
 #include <iostream>
@@ -47,10 +47,8 @@ void test_warmup_sequence_boundary() {
     samples.record_processed(3, 500, 550);
     samples.record_processed(4, 600, 660);
 
-    expect(samples.warmup_processed() == 3,
-           "late and duplicate warmup sequences remain excluded");
-    expect(samples.sample_count() == 3,
-           "events beyond the warmup boundary are sampled");
+    expect(samples.warmup_processed() == 3, "late and duplicate warmup sequences remain excluded");
+    expect(samples.sample_count() == 3, "events beyond the warmup boundary are sampled");
     expect(samples.warmup_processed() + samples.sample_count() == 6,
            "every successful record is classified");
 
@@ -77,13 +75,11 @@ void test_capacity_failure_preserves_state() {
 
     expect(rejected, "recording beyond capacity is rejected");
     expect(samples.sample_count() == 1, "capacity failure preserves count");
-    expect(samples.warmup_processed() == 0,
-           "capacity failure does not change warmup count");
+    expect(samples.warmup_processed() == 0, "capacity failure does not change warmup count");
     expect(samples.data() == storage, "capacity failure does not reallocate");
 
     if (samples.sample_count() == 1) {
-        expect(samples.data()[0] == 20,
-               "capacity failure preserves the existing sample");
+        expect(samples.data()[0] == 20, "capacity failure preserves the existing sample");
     }
 }
 
@@ -100,8 +96,7 @@ void test_invalid_time_preserves_state() {
     }
 
     expect(rejected, "negative measured latency is rejected");
-    expect(samples.sample_count() == 1,
-           "invalid measured time does not append a sample");
+    expect(samples.sample_count() == 1, "invalid measured time does not append a sample");
 
     rejected = false;
 
@@ -112,22 +107,17 @@ void test_invalid_time_preserves_state() {
     }
 
     expect(rejected, "warmup does not hide invalid timestamps");
-    expect(samples.warmup_processed() == 0,
-           "invalid warmup time does not increment its counter");
+    expect(samples.warmup_processed() == 0, "invalid warmup time does not increment its counter");
 
     samples.record_processed(1, 300, 310);
     samples.record_processed(3, 400, 440);
 
-    expect(samples.warmup_processed() == 1,
-           "valid warmup can be recorded after rejection");
-    expect(samples.sample_count() == 2,
-           "valid measured event can be recorded after rejection");
+    expect(samples.warmup_processed() == 1, "valid warmup can be recorded after rejection");
+    expect(samples.sample_count() == 2, "valid measured event can be recorded after rejection");
 
     if (samples.sample_count() == 2) {
-        expect(samples.data()[0] == 25,
-               "invalid timestamp preserves the first sample");
-        expect(samples.data()[1] == 40,
-               "rejected event leaves no hole in sample storage");
+        expect(samples.data()[0] == 25, "invalid timestamp preserves the first sample");
+        expect(samples.data()[1] == 40, "rejected event leaves no hole in sample storage");
     }
 }
 

@@ -35,17 +35,15 @@ struct DownstreamState {
 
 // Counts and decodes a datagram, then updates RX sequence statistics.
 bool decode_and_track_datagram(const std::uint8_t* data, std::size_t size,
-            MarketDataMessage& message, ChannelState& state);
+                               MarketDataMessage& message, ChannelState& state);
 
 // Updates only downstream-owned processing state.
-void process_downstream_message(const MarketDataMessage& message,
-                                            DownstreamState& state);
+void process_downstream_message(const MarketDataMessage& message, DownstreamState& state);
 
 // Processes an already decoded message
 void process_message(const MarketDataMessage& message, ChannelState& state);
 
 // Decodes and processes a datagram
-bool process_datagram(const std::uint8_t* data, std::size_t size, 
-                                                ChannelState& state);
+bool process_datagram(const std::uint8_t* data, std::size_t size, ChannelState& state);
 
-} // namespace udp_ingestion 
+} // namespace udp_ingestion

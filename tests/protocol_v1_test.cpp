@@ -21,12 +21,11 @@ bool equal(const udp_ingestion::MarketDataMessage& left,
            const udp_ingestion::MarketDataMessage& right) {
     return left.sequence == right.sequence && left.order_id == right.order_id &&
            left.price == right.price && left.instrument_id == right.instrument_id &&
-           left.quantity == right.quantity &&
-           left.message_type == right.message_type && left.side == right.side;
+           left.quantity == right.quantity && left.message_type == right.message_type &&
+           left.side == right.side;
 }
 
-void test_round_trip(std::int64_t price,
-                     udp_ingestion::MessageType type,
+void test_round_trip(std::int64_t price, udp_ingestion::MessageType type,
                      udp_ingestion::Side side) {
     const udp_ingestion::MarketDataMessage input{
         42, 0x0102030405060708ULL, price, 1234, 5678, type, side};
@@ -48,12 +47,9 @@ void test_known_byte_order() {
         udp_ingestion::Side::Sell,
     };
     const std::array<std::uint8_t, 34> expected{
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-        0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
-        0x31, 0x32, 0x33, 0x34,
-        0x41, 0x42, 0x43, 0x44,
-        0x02, 0x01,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x11, 0x12, 0x13, 0x14,
+        0x15, 0x16, 0x17, 0x18, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
+        0x31, 0x32, 0x33, 0x34, 0x41, 0x42, 0x43, 0x44, 0x02, 0x01,
     };
     expect(udp_ingestion::encode_protocol_v1(input) == expected,
            "known values use the specified big-endian layout");
@@ -81,21 +77,16 @@ void test_generation() {
     expect(channel_0.side != channel_1.side, "generation produces both sides");
 }
 
-}  // namespace
+} // namespace
 
 int main() {
     static_assert(udp_ingestion::kProtocolV1BufSize == 34,
                   "Protocol v1 wire size must remain 34 bytes");
-    test_round_trip(1'234'567, udp_ingestion::MessageType::Add,
-                    udp_ingestion::Side::Buy);
-    test_round_trip(1'234'567, udp_ingestion::MessageType::Modify,
-                    udp_ingestion::Side::Sell);
-    test_round_trip(1'234'567, udp_ingestion::MessageType::Cancel,
-                    udp_ingestion::Side::Buy);
-    test_round_trip(-1'234'567, udp_ingestion::MessageType::Trade,
-                    udp_ingestion::Side::Sell);
-    test_round_trip(std::numeric_limits<std::int64_t>::min(),
-                    udp_ingestion::MessageType::Modify,
+    test_round_trip(1'234'567, udp_ingestion::MessageType::Add, udp_ingestion::Side::Buy);
+    test_round_trip(1'234'567, udp_ingestion::MessageType::Modify, udp_ingestion::Side::Sell);
+    test_round_trip(1'234'567, udp_ingestion::MessageType::Cancel, udp_ingestion::Side::Buy);
+    test_round_trip(-1'234'567, udp_ingestion::MessageType::Trade, udp_ingestion::Side::Sell);
+    test_round_trip(std::numeric_limits<std::int64_t>::min(), udp_ingestion::MessageType::Modify,
                     udp_ingestion::Side::Buy);
     test_known_byte_order();
     test_invalid_input();

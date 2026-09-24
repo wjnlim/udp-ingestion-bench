@@ -28,8 +28,7 @@ void expect(bool condition, const char* description) {
 void require_success(int result, const char* operation) {
     if (result < 0) {
         const int error = errno;
-        throw std::system_error(
-            error, std::generic_category(), operation);
+        throw std::system_error(error, std::generic_category(), operation);
     }
 }
 
@@ -49,17 +48,12 @@ public:
             address_.sin_port = 0;
 
             require_success(
-                ::bind(
-                    fd_,
-                    reinterpret_cast<const sockaddr*>(&address_),
-                    sizeof(address_)),
+                ::bind(fd_, reinterpret_cast<const sockaddr*>(&address_), sizeof(address_)),
                 "test bind");
 
             socklen_t size = sizeof(address_);
-            require_success(
-                ::getsockname(
-                    fd_, reinterpret_cast<sockaddr*>(&address_), &size),
-                "test getsockname");
+            require_success(::getsockname(fd_, reinterpret_cast<sockaddr*>(&address_), &size),
+                            "test getsockname");
         } catch (...) {
             ::close(fd_);
             throw;
@@ -78,15 +72,12 @@ public:
     }
 
     void send_and_wait(const std::uint8_t* data, std::size_t size) {
-        const auto sent = ::sendto(
-            fd_, data, size, 0,
-            reinterpret_cast<const sockaddr*>(&address_),
-            sizeof(address_));
+        const auto sent = ::sendto(fd_, data, size, 0, reinterpret_cast<const sockaddr*>(&address_),
+                                   sizeof(address_));
 
         if (sent < 0) {
             const int error = errno;
-            throw std::system_error(
-                error, std::generic_category(), "test sendto");
+            throw std::system_error(error, std::generic_category(), "test sendto");
         }
         if (sent != static_cast<ssize_t>(size)) {
             throw std::runtime_error("unexpected test send size");
@@ -102,8 +93,8 @@ public:
         if (ready == 0) {
             throw std::runtime_error("test receive readiness timeout");
         }
-        if ((readiness.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0
-            || (readiness.revents & POLLIN) == 0) {
+        if ((readiness.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0 ||
+            (readiness.revents & POLLIN) == 0) {
             throw std::runtime_error("unexpected test socket readiness");
         }
     }
@@ -116,13 +107,11 @@ private:
 void expect_empty_socket(int fd) {
     udp_ingestion::ReceivedDatagram output{};
 
-    const auto received =
-        udp_ingestion::receive_timestamped_datagram(fd, output);
+    const auto received = udp_ingestion::receive_timestamped_datagram(fd, output);
     const int error = errno;
 
     expect(received == -1, "empty socket returns minus one");
-    expect(error == EAGAIN || error == EWOULDBLOCK,
-           "empty socket preserves EAGAIN or EWOULDBLOCK");
+    expect(error == EAGAIN || error == EWOULDBLOCK, "empty socket preserves EAGAIN or EWOULDBLOCK");
 }
 
 void test_payload_sizes() {
@@ -135,13 +124,9 @@ void test_payload_sizes() {
 
     // Includes short input, exact protocol size, oversized input,
     // and a normal datagram after truncation.
-    const std::array<std::size_t, 5> sizes{
-        udp_ingestion::kProtocolV1BufSize,
-        0,
-        udp_ingestion::kProtocolV1BufSize - 1,
-        sent.size(),
-        udp_ingestion::kProtocolV1BufSize
-    };
+    const std::array<std::size_t, 5> sizes{udp_ingestion::kProtocolV1BufSize, 0,
+                                           udp_ingestion::kProtocolV1BufSize - 1, sent.size(),
+                                           udp_ingestion::kProtocolV1BufSize};
 
     expect_empty_socket(fixture.get_fd());
 
@@ -152,21 +137,16 @@ void test_payload_sizes() {
 
         output.rx_timestamp_ns = -1;
 
-        const auto received =
-            udp_ingestion::receive_timestamped_datagram(
-                fixture.get_fd(), output);
-        const auto expected_size =
-            std::min(size, output.payload.size());
+        const auto received = udp_ingestion::receive_timestamped_datagram(fixture.get_fd(), output);
+        const auto expected_size = std::min(size, output.payload.size());
 
         expect(received == static_cast<ssize_t>(expected_size),
                "receive returns the number of payload bytes copied");
-        expect(output.rx_timestamp_ns > 0,
-               "each received datagram has a kernel RX timestamp");
+        expect(output.rx_timestamp_ns > 0, "each received datagram has a kernel RX timestamp");
 
         if (received == static_cast<ssize_t>(expected_size)) {
             for (std::size_t i = 0; i < expected_size; ++i) {
-                expect(output.payload[i] == sent[i],
-                       "received payload bytes match");
+                expect(output.payload[i] == sent[i], "received payload bytes match");
             }
         }
 
@@ -183,15 +163,12 @@ void test_missing_timestamp() {
     bool rejected = false;
 
     try {
-        static_cast<void>(
-            udp_ingestion::receive_timestamped_datagram(
-                fixture.get_fd(), output));
+        static_cast<void>(udp_ingestion::receive_timestamped_datagram(fixture.get_fd(), output));
     } catch (const std::runtime_error&) {
         rejected = true;
     }
 
-    expect(rejected,
-           "received datagram without timestamp metadata is rejected");
+    expect(rejected, "received datagram without timestamp metadata is rejected");
 
     // The datagram was consumed even though metadata validation failed.
     expect_empty_socket(fixture.get_fd());
@@ -200,8 +177,7 @@ void test_missing_timestamp() {
 void test_invalid_descriptor() {
     udp_ingestion::ReceivedDatagram output{};
 
-    const auto received =
-        udp_ingestion::receive_timestamped_datagram(-1, output);
+    const auto received = udp_ingestion::receive_timestamped_datagram(-1, output);
     const int error = errno;
 
     expect(received == -1, "invalid descriptor returns minus one");
@@ -215,8 +191,7 @@ void test_invalid_descriptor() {
         rejected = exception.code().value() == EBADF;
     }
 
-    expect(rejected,
-           "timestamp setup reports EBADF for an invalid descriptor");
+    expect(rejected, "timestamp setup reports EBADF for an invalid descriptor");
 }
 
 } // namespace

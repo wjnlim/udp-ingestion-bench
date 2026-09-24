@@ -27,8 +27,8 @@ public:
         address.sin_family = AF_INET;
         address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         address.sin_port = htons(port);
-        if (::bind(descriptor_, reinterpret_cast<const sockaddr*>(&address),
-                   sizeof(address)) != 0) {
+        if (::bind(descriptor_, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) !=
+            0) {
             const std::string message = std::string("bind: ") + std::strerror(errno);
             ::close(descriptor_);
             descriptor_ = -1;
@@ -43,7 +43,9 @@ public:
     }
     UdpSocket(const UdpSocket&) = delete;
     UdpSocket& operator=(const UdpSocket&) = delete;
-    int get_fd() const { return descriptor_; }
+    int get_fd() const {
+        return descriptor_;
+    }
 
 private:
     int descriptor_;
@@ -74,8 +76,7 @@ void run(std::uint16_t base_port, std::uint64_t expected_per_channel) {
     std::array<std::uint64_t, kChannelCount> received{};
     std::array<std::uint64_t, kChannelCount> expected_sequence{1, 1};
 
-    while (received[0] < expected_per_channel ||
-           received[1] < expected_per_channel) {
+    while (received[0] < expected_per_channel || received[1] < expected_per_channel) {
         const int ready = ::poll(poll_descriptors.data(), poll_descriptors.size(), 3000);
         if (ready == 0) {
             throw std::runtime_error("timed out waiting for UDP packets");
@@ -90,14 +91,13 @@ void run(std::uint16_t base_port, std::uint64_t expected_per_channel) {
                 continue;
             }
             std::array<std::uint8_t, 128> buffer{};
-            const auto size =
-                ::recv(sockets[channel].get_fd(), buffer.data(), buffer.size(), 0);
+            const auto size = ::recv(sockets[channel].get_fd(), buffer.data(), buffer.size(), 0);
             if (size != static_cast<ssize_t>(udp_ingestion::kProtocolV1BufSize)) {
                 throw std::runtime_error("received payload size is not 34 bytes");
             }
             udp_ingestion::MarketDataMessage message{};
-            if (!udp_ingestion::decode_protocol_v1(
-                    buffer.data(), static_cast<std::size_t>(size), message)) {
+            if (!udp_ingestion::decode_protocol_v1(buffer.data(), static_cast<std::size_t>(size),
+                                                   message)) {
                 throw std::runtime_error("failed to decode Protocol v1 payload");
             }
             if (message.sequence != expected_sequence[channel]++) {
@@ -106,17 +106,16 @@ void run(std::uint16_t base_port, std::uint64_t expected_per_channel) {
             ++received[channel];
         }
     }
-    std::cout << "validated " << received[0] << " packets on channel 0 and "
-              << received[1] << " packets on channel 1\n";
+    std::cout << "validated " << received[0] << " packets on channel 0 and " << received[1]
+              << " packets on channel 1\n";
 }
 
-}  // namespace
+} // namespace
 
 int main(int argc, char* argv[]) {
     try {
         if (argc != 3) {
-            std::cerr << "Usage: " << argv[0]
-                      << " BASE_PORT EXPECTED_PACKETS_PER_CHANNEL\n";
+            std::cerr << "Usage: " << argv[0] << " BASE_PORT EXPECTED_PACKETS_PER_CHANNEL\n";
             return 1;
         }
         const auto port = parse_value(argv[1], "BASE_PORT");

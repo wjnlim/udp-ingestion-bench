@@ -18,11 +18,13 @@ struct ReceiveWorkerConfig {
 
     // Per-channel datagram count, including invalid datagrams
     std::uint64_t expected_packets = 500;
-    
+
     // This is also applied while waiting for the first datagram.
     std::chrono::milliseconds idle_timeout{3000};
 
     std::optional<int> cpu;
+    // Pause (_mm_pause()) once before retrying an empty receive
+    bool rx_pause = false;
 };
 
 enum class ReceiveStopReason {
@@ -48,8 +50,7 @@ public:
     ReceiveWorker& operator=(const ReceiveWorker&) = delete;
 
     // Receive loop
-    ReceiveWorkerResult run(const std::atomic<bool>& stop_requested,
-                            PipelineChannel& output,
+    ReceiveWorkerResult run(const std::atomic<bool>& stop_requested, PipelineChannel& output,
                             StartupGate& startup);
 
 private:

@@ -22,6 +22,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <iomanip>
 
 namespace {
 
@@ -44,10 +45,14 @@ public:
         }
     }
 
-    ~UdpSocket() { ::close(descriptor_); }
+    ~UdpSocket() {
+        ::close(descriptor_);
+    }
     UdpSocket(const UdpSocket&) = delete;
     UdpSocket& operator=(const UdpSocket&) = delete;
-    int get_fd() const { return descriptor_; }
+    int get_fd() const {
+        return descriptor_;
+    }
 
 private:
     int descriptor_;
@@ -55,12 +60,10 @@ private:
 
 std::uint64_t parse_unsigned(std::string_view val_str, const std::string& option) {
     std::uint64_t value = 0;
-    const auto result = std::from_chars(
-        val_str.data(), val_str.data() + val_str.size(), value);
+    const auto result = std::from_chars(val_str.data(), val_str.data() + val_str.size(), value);
     if (val_str.empty() || result.ec != std::errc{} ||
         result.ptr != val_str.data() + val_str.size()) {
-        throw std::invalid_argument(
-            option + " requires an unsigned decimal integer");
+        throw std::invalid_argument(option + " requires an unsigned decimal integer");
     }
     return value;
 }
@@ -120,18 +123,7 @@ PublisherConfig parse_arguments(int argc, char* argv[]) {
     return config;
 }
 
-// void apply_cpu_affinity(int cpu) {
-//     cpu_set_t set;
-//     CPU_ZERO(&set);
-//     CPU_SET(cpu, &set);
-//     if (::sched_setaffinity(0, sizeof(set), &set) != 0) {
-//         throw std::runtime_error(std::string("sched_setaffinity for CPU ") +
-//                                  std::to_string(cpu) + ": " + std::strerror(errno));
-//     }
-// }
-
-std::array<sockaddr_in, kChannelCount> make_destinations(
-    const PublisherConfig& config) {
+std::array<sockaddr_in, kChannelCount> make_destinations(const PublisherConfig& config) {
     std::array<sockaddr_in, kChannelCount> destinations{};
     in_addr address{};
     if (::inet_pton(AF_INET, config.destination_address.c_str(), &address) != 1) {
@@ -148,7 +140,6 @@ std::array<sockaddr_in, kChannelCount> make_destinations(
 
 void run_publisher(const PublisherConfig& config) {
     if (config.cpu.has_value()) {
-        // apply_cpu_affinity(*config.cpu);
         udp_ingestion::pin_current_thread(*config.cpu, "publisher");
     }
 
@@ -164,12 +155,9 @@ void run_publisher(const PublisherConfig& config) {
             channel, next_sequence[channel]++, config.instrument_count);
         const auto pbuf = udp_ingestion::encode_protocol_v1(message);
         const auto& destination = destinations[channel];
-        const auto result = ::sendto(socket.get_fd(),
-                                     pbuf.data(),
-                                     pbuf.size(),
-                                     0,
-                                     reinterpret_cast<const sockaddr*>(&destination),
-                                     sizeof(destination));
+        const auto result =
+            ::sendto(socket.get_fd(), pbuf.data(), pbuf.size(), 0,
+                     reinterpret_cast<const sockaddr*>(&destination), sizeof(destination));
         if (result < 0) {
             throw std::runtime_error(std::string("sendto: ") + std::strerror(errno));
         }
@@ -177,17 +165,35 @@ void run_publisher(const PublisherConfig& config) {
             throw std::runtime_error("sendto returned an unexpected byte count");
         }
 
-        const auto deadline = start +
-            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                period * static_cast<double>(sent + 1));
+        const auto deadline =
+            start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                        period * static_cast<double>(sent + 1));
         std::this_thread::sleep_until(deadline);
     }
 
+    const auto finish = std::chrono::steady_clock::now();
+    const auto elapsed_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(finish - start).count();
+    if (elapsed_ns <= 0) {
+        throw std::runtime_error("publisher elapsed time must be positive");
+    }
+    const auto achieved_pps =
+        static_cast<double>(config.count) * 1'000'000'000.0 / static_cast<double>(elapsed_ns);
+
     std::cout << "sent " << config.count << " packets across " << kChannelCount
               << " channels at target aggregate rate " << config.rate << " pps\n";
+
+    const auto previous_precision = std::cout.precision();
+    std::cout << std::setprecision(10) << "publisher_rate_scope=full_paced_run\n"
+              << "publisher_requested_pps=" << config.rate
+              << "\npublisher_sent_packets=" << config.count
+              << "\npublisher_elapsed_ns=" << elapsed_ns
+              << "\npublisher_achieved_pps=" << achieved_pps << '\n';
+
+    std::cout.precision(previous_precision);
 }
 
-}  // namespace
+} // namespace
 
 int main(int argc, char* argv[]) {
     try {

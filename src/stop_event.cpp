@@ -44,8 +44,7 @@ void StopEvent::notify() {
                 return;
             }
 
-            throw std::system_error(error, std::generic_category(), 
-                                    "write stop event");
+            throw std::system_error(error, std::generic_category(), "write stop event");
         }
         throw std::runtime_error("short write to stop event");
     }

@@ -9,14 +9,11 @@ namespace udp_ingestion {
 // Startup coordinator; Only used before packet-processing loops
 class StartupGate {
 public:
-    explicit StartupGate(std::size_t expected_workers)
-    : expected_workers_(expected_workers) {
-
-    }
+    explicit StartupGate(std::size_t expected_workers) : expected_workers_(expected_workers) {}
 
     StartupGate(const StartupGate&) = delete;
     StartupGate& operator=(const StartupGate&) = delete;
-    
+
     // Each worker calls this once, after successful initialization.
     // Returns false if startup was cancelled.
     bool arrive_and_wait() {
@@ -29,9 +26,7 @@ public:
         ++ready_workers_;
         condition_.notify_all();
 
-        condition_.wait(lock, [this]() {
-            return released_ || cancelled_;
-        });
+        condition_.wait(lock, [this]() { return released_ || cancelled_; });
 
         return !cancelled_;
     }
@@ -40,13 +35,12 @@ public:
     bool wait_until_ready() {
         std::unique_lock<std::mutex> lock(mutex_);
 
-        condition_.wait(lock, [this]() {
-            return ready_workers_ == expected_workers_ || cancelled_;
-        });
+        condition_.wait(lock,
+                        [this]() { return ready_workers_ == expected_workers_ || cancelled_; });
 
         return !cancelled_;
     }
-    
+
     // Called after wait_until_ready() succeeds.
     void release() {
         {
@@ -75,4 +69,4 @@ private:
     std::condition_variable condition_;
 };
 
-} // namespace udp_ingestion 
+} // namespace udp_ingestion

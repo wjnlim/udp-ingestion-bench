@@ -14,7 +14,7 @@ inline constexpr std::size_t kPipelineChannelCount = 2;
 
 struct PipelineEvent {
     MarketDataMessage message{};
-    
+
     // Kernel software RX time in CLOCK_REALTIME epoch nanoseconds.
     std::int64_t rx_timestamp_ns = 0;
 };
@@ -26,9 +26,7 @@ struct ProducerStats {
 
 class PipelineChannel {
 public:
-    explicit PipelineChannel(std::size_t capacity) : queue_(capacity) {
-
-    }
+    explicit PipelineChannel(std::size_t capacity) : queue_(capacity) {}
 
     PipelineChannel(const PipelineChannel&) = delete;
     PipelineChannel& operator=(const PipelineChannel&) = delete;
@@ -72,12 +70,8 @@ private:
 };
 
 struct Pipeline {
-    explicit Pipeline(std::size_t capacity) 
-    : channels{
-            PipelineChannel(capacity),
-            PipelineChannel(capacity) } {
-                
-    }
+    explicit Pipeline(std::size_t capacity)
+        : channels{PipelineChannel(capacity), PipelineChannel(capacity)} {}
 
     Pipeline(const Pipeline&) = delete;
     Pipeline& operator=(const Pipeline&) = delete;
@@ -86,6 +80,5 @@ struct Pipeline {
 
     std::array<PipelineChannel, kPipelineChannelCount> channels;
 };
-
 
 } // namespace udp_ingestion

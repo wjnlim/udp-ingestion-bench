@@ -39,9 +39,9 @@ void expect(bool condition, const char* description) {
     }
 }
 
-EpollReceiveWorkerConfig make_config(
-    std::uint64_t total,
-    std::chrono::milliseconds timeout = std::chrono::milliseconds{1000}) {
+EpollReceiveWorkerConfig make_config(std::uint64_t total,
+                                     std::chrono::milliseconds timeout = std::chrono::milliseconds{
+                                         1000}) {
     EpollReceiveWorkerConfig config;
     config.base_port = kTestBasePort;
     config.expected_total_packets = total;
@@ -51,16 +51,14 @@ EpollReceiveWorkerConfig make_config(
 
 class Fixture {
 public:
-    explicit Fixture(
-        std::uint64_t total,
-        std::chrono::milliseconds timeout = std::chrono::milliseconds{1000},
-        std::size_t queue_capacity = 256)
+    explicit Fixture(std::uint64_t total,
+                     std::chrono::milliseconds timeout = std::chrono::milliseconds{1000},
+                     std::size_t queue_capacity = 256)
         : pipeline(queue_capacity), worker(make_config(total, timeout), stop_event) {
         sender_fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
         if (sender_fd_ < 0) {
             const int error = errno;
-            throw std::system_error(
-                error, std::generic_category(), "test sender socket");
+            throw std::system_error(error, std::generic_category(), "test sender socket");
         }
     }
 
@@ -73,27 +71,23 @@ public:
     Fixture(const Fixture&) = delete;
     Fixture& operator=(const Fixture&) = delete;
 
-    void send_datagram(
-        std::size_t channel, const std::uint8_t* data, std::size_t size) {
+    void send_datagram(std::size_t channel, const std::uint8_t* data, std::size_t size) {
         if (channel >= kChannelCount) {
             throw std::invalid_argument("invalid test channel");
         }
 
         sockaddr_in destination{};
         destination.sin_family = AF_INET;
-        destination.sin_port =
-            htons(static_cast<std::uint16_t>(kTestBasePort + channel));
+        destination.sin_port = htons(static_cast<std::uint16_t>(kTestBasePort + channel));
         destination.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-        const auto sent = ::sendto(
-            sender_fd_, data, size, 0,
-            reinterpret_cast<const sockaddr*>(&destination),
-            sizeof(destination));
+        const auto sent =
+            ::sendto(sender_fd_, data, size, 0, reinterpret_cast<const sockaddr*>(&destination),
+                     sizeof(destination));
 
         if (sent < 0) {
             const int error = errno;
-            throw std::system_error(
-                error, std::generic_category(), "test sendto");
+            throw std::system_error(error, std::generic_category(), "test sendto");
         }
 
         if (static_cast<std::size_t>(sent) != size) {
@@ -101,13 +95,10 @@ public:
         }
 
         // Reference application-level processing, without the socket/queue path.
-        // udp_ingestion::process_datagram(data, size, expected[channel]);
         udp_ingestion::MarketDataMessage message{};
-        if (udp_ingestion::decode_and_track_datagram(
-                data, size, message, expected[channel])) {
+        if (udp_ingestion::decode_and_track_datagram(data, size, message, expected[channel])) {
             expected_messages[channel].push_back(message);
-            udp_ingestion::process_downstream_message(
-                message, expected_downstream[channel]);
+            udp_ingestion::process_downstream_message(message, expected_downstream[channel]);
         }
     }
 
@@ -117,8 +108,7 @@ public:
     }
 
     void send_message(std::size_t channel, std::uint64_t sequence) {
-        const auto message =
-            udp_ingestion::make_synthetic_message(channel, sequence, 16);
+        const auto message = udp_ingestion::make_synthetic_message(channel, sequence, 16);
         const auto buffer = udp_ingestion::encode_protocol_v1(message);
         send_datagram(channel, buffer.data(), buffer.size());
     }
@@ -128,89 +118,69 @@ public:
     EpollReceiveWorker worker;
 
     std::array<ChannelState, kChannelCount> expected{};
-    std::array<udp_ingestion::DownstreamState, kChannelCount>
-                                                expected_downstream{};
-    std::array<std::vector<udp_ingestion::MarketDataMessage>, kChannelCount>
-                                                expected_messages{};
+    std::array<udp_ingestion::DownstreamState, kChannelCount> expected_downstream{};
+    std::array<std::vector<udp_ingestion::MarketDataMessage>, kChannelCount> expected_messages{};
+
 private:
     int sender_fd_ = -1;
 };
 
-void expect_state(
-    const ChannelState& actual, const ChannelState& expected) {
+void expect_state(const ChannelState& actual, const ChannelState& expected) {
     expect(actual.received_packets == expected.received_packets,
            "received count matches direct processing");
-    expect(actual.valid_packets == expected.valid_packets,
-           "valid count matches direct processing");
+    expect(actual.valid_packets == expected.valid_packets, "valid count matches direct processing");
     expect(actual.invalid_packets == expected.invalid_packets,
            "invalid count matches direct processing");
     expect(actual.expected_sequence == expected.expected_sequence,
            "expected sequence matches direct processing");
     expect(actual.sequence_exhausted == expected.sequence_exhausted,
            "sequence exhaustion matches direct processing");
-    expect(actual.gap_events == expected.gap_events,
-           "gap events match direct processing");
+    expect(actual.gap_events == expected.gap_events, "gap events match direct processing");
     expect(actual.missing_packets == expected.missing_packets,
            "missing count matches direct processing");
-    expect(actual.late_or_duplicate_packets ==
-               expected.late_or_duplicate_packets,
+    expect(actual.late_or_duplicate_packets == expected.late_or_duplicate_packets,
            "late/duplicate count matches direct processing");
-    // expect(actual.checksum == expected.checksum,
-    //        "checksum matches direct processing");
 }
 
-void expect_results(
-    Fixture& fixture,
-    const EpollReceiveResult& results,
-    std::uint64_t total) {
+void expect_results(Fixture& fixture, const EpollReceiveResult& results, std::uint64_t total) {
     for (std::size_t i = 0; i < kChannelCount; ++i) {
         auto target = total / kChannelCount;
         if (i == 0) {
             target += total % kChannelCount;
         }
 
-        expect(results[i].port == kTestBasePort + i,
-               "result contains the bound channel port");
-        expect(results[i].expected_packets == target,
-               "result contains the assigned target");
+        expect(results[i].port == kTestBasePort + i, "result contains the bound channel port");
+        expect(results[i].expected_packets == target, "result contains the assigned target");
         expect_state(results[i].result.state, fixture.expected[i]);
 
         auto& channel = fixture.pipeline.channels[i];
 
-        expect(channel.producer_done(),
-               "producer signals completion before run returns");
+        expect(channel.producer_done(), "producer signals completion before run returns");
 
         const auto producer = channel.producer_stats();
 
-        expect(producer.enqueued_packets ==
-                   fixture.expected[i].valid_packets,
+        expect(producer.enqueued_packets == fixture.expected[i].valid_packets,
                "every valid datagram is enqueued");
-        expect(producer.queue_full_drops == 0,
-               "existing scenarios do not overflow the queue");
+        expect(producer.queue_full_drops == 0, "existing scenarios do not overflow the queue");
 
         udp_ingestion::DownstreamState processed{};
         udp_ingestion::PipelineEvent event{};
         std::size_t message_idx = 0;
 
         while (channel.try_dequeue(event)) {
-            expect(event.rx_timestamp_ns > 0,
-                   "queued message contains a kernel RX timestamp");
+            expect(event.rx_timestamp_ns > 0, "queued message contains a kernel RX timestamp");
 
             if (message_idx < fixture.expected_messages[i].size()) {
-                const auto actual =
-                    udp_ingestion::encode_protocol_v1(event.message);
+                const auto actual = udp_ingestion::encode_protocol_v1(event.message);
                 const auto expected =
-                    udp_ingestion::encode_protocol_v1(
-                        fixture.expected_messages[i][message_idx]);
+                    udp_ingestion::encode_protocol_v1(fixture.expected_messages[i][message_idx]);
 
-                expect(actual == expected,
-                       "queued message content and FIFO order match");
+                expect(actual == expected, "queued message content and FIFO order match");
             } else {
                 expect(false, "queue contains an unexpected extra message");
             }
 
-            udp_ingestion::process_downstream_message(
-                event.message, processed);
+            udp_ingestion::process_downstream_message(event.message, processed);
             ++message_idx;
         }
 
@@ -218,11 +188,9 @@ void expect_results(
                "queue contains exactly the expected valid messages");
         expect(processed.processed_packets == producer.enqueued_packets,
                "draining processes every enqueued message");
-        expect(processed.processed_packets ==
-                   fixture.expected_downstream[i].processed_packets,
+        expect(processed.processed_packets == fixture.expected_downstream[i].processed_packets,
                "processed count matches direct processing");
-        expect(processed.checksum ==
-                   fixture.expected_downstream[i].checksum,
+        expect(processed.checksum == fixture.expected_downstream[i].checksum,
                "downstream checksum matches direct processing");
     }
 }
@@ -248,16 +216,14 @@ void test_normal_count(std::uint64_t total) {
 void test_invalid_input_and_independent_sequences() {
     Fixture fixture(18);
 
-    const auto message =
-        udp_ingestion::make_synthetic_message(0, 1, 16);
+    const auto message = udp_ingestion::make_synthetic_message(0, 1, 16);
     const auto buffer = udp_ingestion::encode_protocol_v1(message);
 
     // Six invalid datagrams on channel 0.
     fixture.send_datagram(0, buffer.data(), 0);
     fixture.send_datagram(0, buffer.data(), buffer.size() - 1);
 
-    std::array<std::uint8_t, udp_ingestion::kProtocolV1BufSize + 1>
-        oversized{};
+    std::array<std::uint8_t, udp_ingestion::kProtocolV1BufSize + 1> oversized{};
     fixture.send_datagram(0, oversized.data(), oversized.size());
 
     std::array<std::uint8_t, 128> much_larger{};
@@ -291,13 +257,11 @@ void test_invalid_input_and_independent_sequences() {
     expect(state0.invalid_packets == 6, "six invalid datagrams received");
     expect(state0.gap_events == 1, "channel zero observes one gap");
     expect(state0.missing_packets == 2, "channel zero observes two missing");
-    expect(state0.late_or_duplicate_packets == 1,
-           "channel zero observes one late packet");
+    expect(state0.late_or_duplicate_packets == 1, "channel zero observes one late packet");
 
     const auto& state1 = results[1].result.state;
     expect(state1.valid_packets == 9, "channel one receives nine valid packets");
-    expect(state1.gap_events == 0 &&
-               state1.late_or_duplicate_packets == 0,
+    expect(state1.gap_events == 0 && state1.late_or_duplicate_packets == 0,
            "channel one sequence state remains independent");
 }
 
@@ -315,8 +279,7 @@ void test_initial_timeout() {
                "silent channel reaches idle timeout");
     }
 
-    expect(elapsed >= std::chrono::milliseconds{100},
-           "initial timeout does not finish early");
+    expect(elapsed >= std::chrono::milliseconds{100}, "initial timeout does not finish early");
 }
 
 void test_completed_channel_and_partial_peer() {
@@ -358,18 +321,14 @@ void test_queue_full_drops_preserve_rx_tracking() {
                "all four valid datagrams are tracked before queue admission");
         expect(result.state.expected_sequence == 5,
                "RX sequence tracking advances across queue drops");
-        expect(result.state.gap_events == 0 &&
-                   result.state.missing_packets == 0,
+        expect(result.state.gap_events == 0 && result.state.missing_packets == 0,
                "queue drops do not become RX sequence gaps");
 
-        expect(channel.producer_done(),
-               "producer completes even when its queue is full");
-        expect(producer.enqueued_packets == 1,
-               "capacity-one queue accepts exactly one message");
+        expect(channel.producer_done(), "producer completes even when its queue is full");
+        expect(producer.enqueued_packets == 1, "capacity-one queue accepts exactly one message");
         expect(producer.queue_full_drops == 3,
                "remaining messages are counted as queue-full drops");
-        expect(result.state.valid_packets ==
-                   producer.enqueued_packets + producer.queue_full_drops,
+        expect(result.state.valid_packets == producer.enqueued_packets + producer.queue_full_drops,
                "valid packets equal enqueued packets plus queue drops");
 
         udp_ingestion::PipelineEvent event{};
@@ -380,19 +339,15 @@ void test_queue_full_drops_preserve_rx_tracking() {
         if (dequeued) {
             expect(event.rx_timestamp_ns > 0,
                    "accepted message retains its RX timestamp when queue is full");
-                   
-            const auto actual =
-                udp_ingestion::encode_protocol_v1(event.message);
-            const auto expected =
-                udp_ingestion::encode_protocol_v1(
-                    fixture.expected_messages[i].front());
 
-            expect(actual == expected,
-                   "queue full does not overwrite the first message");
+            const auto actual = udp_ingestion::encode_protocol_v1(event.message);
+            const auto expected =
+                udp_ingestion::encode_protocol_v1(fixture.expected_messages[i].front());
+
+            expect(actual == expected, "queue full does not overwrite the first message");
         }
 
-        expect(!channel.try_dequeue(event),
-               "dropped messages were not placed in the queue");
+        expect(!channel.try_dequeue(event), "dropped messages were not placed in the queue");
     }
 }
 
@@ -405,10 +360,9 @@ void test_stop_before_run(std::uint64_t total) {
     expect_results(fixture, results, total);
 
     for (std::size_t i = 0; i < kChannelCount; ++i) {
-        const auto expected_reason =
-            results[i].expected_packets == 0
-                ? ReceiveStopReason::CountReached
-                : ReceiveStopReason::StopRequested;
+        const auto expected_reason = results[i].expected_packets == 0
+                                         ? ReceiveStopReason::CountReached
+                                         : ReceiveStopReason::StopRequested;
 
         expect(results[i].result.stop_reason == expected_reason,
                "stop affects active channels without changing zero-target completion");
@@ -438,8 +392,7 @@ void test_stop_after_peer_completion() {
     bool peer_completed = false;
 
     try {
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds{2};
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
 
         while (std::chrono::steady_clock::now() < deadline) {
             if (fixture.pipeline.channels[0].producer_done()) {
@@ -468,8 +421,7 @@ void test_stop_after_peer_completion() {
         std::rethrow_exception(notifier_error);
     }
 
-    expect(peer_completed,
-           "channel zero completes before the stop notification");
+    expect(peer_completed, "channel zero completes before the stop notification");
 
     expect_results(fixture, results, 2);
 

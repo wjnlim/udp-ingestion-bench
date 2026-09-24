@@ -7,8 +7,7 @@
 
 namespace udp_ingestion {
 
-MarketDataMessage make_synthetic_message(std::size_t channel,
-                                         std::uint64_t sequence,
+MarketDataMessage make_synthetic_message(std::size_t channel, std::uint64_t sequence,
                                          std::uint32_t instrument_count);
 
-}  // namespace udp_ingestion
+} // namespace udp_ingestion

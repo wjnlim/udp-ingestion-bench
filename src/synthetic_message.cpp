@@ -4,10 +4,9 @@
 #include <stdexcept>
 
 namespace udp_ingestion {
-    
-// produce a deterministic syntheic market data base on arguments
-MarketDataMessage make_synthetic_message(std::size_t channel,
-                                         std::uint64_t sequence,
+
+// produce a deterministic synthetic market data base on arguments
+MarketDataMessage make_synthetic_message(std::size_t channel, std::uint64_t sequence,
                                          std::uint32_t instrument_count) {
     if (instrument_count == 0) {
         throw std::invalid_argument("instrument_count must be positive");
@@ -19,8 +18,8 @@ MarketDataMessage make_synthetic_message(std::size_t channel,
         MessageType::Cancel,
         MessageType::Trade,
     };
-    const auto instrument_id = static_cast<std::uint32_t>(
-                                   (sequence - 1 + channel) % instrument_count) + 1;
+    const auto instrument_id =
+        static_cast<std::uint32_t>((sequence - 1 + channel) % instrument_count) + 1;
 
     return MarketDataMessage{
         sequence,
@@ -33,4 +32,4 @@ MarketDataMessage make_synthetic_message(std::size_t channel,
     };
 }
 
-}  // namespace udp_ingestion
+} // namespace udp_ingestion

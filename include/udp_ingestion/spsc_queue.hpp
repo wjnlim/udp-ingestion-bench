@@ -9,18 +9,16 @@
 
 namespace udp_ingestion {
 
-template <typename T>
-class SpscQueue {
+template <typename T> class SpscQueue {
     static_assert(std::is_trivially_copyable<T>::value,
-        "SpscQueue requires a trivially copyable payload");
+                  "SpscQueue requires a trivially copyable payload");
     static_assert(std::atomic<std::size_t>::is_always_lock_free,
-        "SpscQueue requires lock-free index atomics");
+                  "SpscQueue requires lock-free index atomics");
+
 public:
     explicit SpscQueue(std::size_t capacity)
-    : capacity_(checked_capacity(capacity)), mask_(capacity_-1),
-        slots_(std::make_unique<T[]>(capacity_)) {
-
-    }
+        : capacity_(checked_capacity(capacity)), mask_(capacity_ - 1),
+          slots_(std::make_unique<T[]>(capacity_)) {}
 
     SpscQueue(const SpscQueue&) = delete;
     SpscQueue& operator=(const SpscQueue&) = delete;
@@ -36,7 +34,7 @@ public:
         }
 
         slots_[tail & mask_] = value;
-        tail_.value.store(tail+1, std::memory_order_release);
+        tail_.value.store(tail + 1, std::memory_order_release);
         return true;
     }
 
@@ -50,21 +48,20 @@ public:
 
         value = slots_[head & mask_];
 
-        head_.value.store(head+1, std::memory_order_release);
+        head_.value.store(head + 1, std::memory_order_release);
         return true;
     }
 
 private:
     static constexpr std::size_t kCacheLineSize = 64;
-    
+
     struct alignas(kCacheLineSize) Position {
         std::atomic<std::size_t> value{0};
     };
 
     static std::size_t checked_capacity(std::size_t capacity) {
-        if (capacity == 0 || (capacity & (capacity-1)) != 0) {
-            throw std::invalid_argument(
-                "SpscQueue capacity must be a positive power of two");
+        if (capacity == 0 || (capacity & (capacity - 1)) != 0) {
+            throw std::invalid_argument("SpscQueue capacity must be a positive power of two");
         }
 
         const auto maximum = std::numeric_limits<std::size_t>::max();
@@ -85,4 +82,3 @@ private:
 };
 
 } // namespace udp_ingestion
-

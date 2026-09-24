@@ -23,21 +23,15 @@ void expect(bool condition, const char* description) {
 }
 
 MarketDataMessage make_message(std::uint64_t sequence) {
-    return MarketDataMessage {
-        sequence,
-        10,
-        10'000,
-        2,
-        3,
-        MessageType::Modify,
-        Side::Sell,
+    return MarketDataMessage{
+        sequence, 10, 10'000, 2, 3, MessageType::Modify, Side::Sell,
     };
 }
 
 void deliver(std::uint64_t sequence, ChannelState& state) {
     const auto pbuf = udp_ingestion::encode_protocol_v1(make_message(sequence));
     expect(udp_ingestion::process_datagram(pbuf.data(), pbuf.size(), state),
-        "valid datagram is accepted");
+           "valid datagram is accepted");
 }
 
 void test_normal_sequence() {
@@ -81,14 +75,10 @@ void test_gaps_and_late_packets() {
     deliver(3, state);
     deliver(8, state);
 
-    expect(state.expected_sequence == 9,
-           "late and duplicate packets do not move expectation");
-    expect(state.late_or_duplicate_packets == 2,
-           "late and duplicate packets share one counter");
-    expect(state.missing_packets == 5,
-           "late arrival does not reduce observed missing count");
-    expect(state.gap_events == 2,
-           "late and duplicate packets do not create gaps");
+    expect(state.expected_sequence == 9, "late and duplicate packets do not move expectation");
+    expect(state.late_or_duplicate_packets == 2, "late and duplicate packets share one counter");
+    expect(state.missing_packets == 5, "late arrival does not reduce observed missing count");
+    expect(state.gap_events == 2, "late and duplicate packets do not create gaps");
 
     deliver(9, state);
 
@@ -98,16 +88,13 @@ void test_gaps_and_late_packets() {
     expect(state.invalid_packets == 0, "sequence anomalies are not invalid");
 
     // Six messages: sequence sum 33 plus six times the other-field sum 10017.
-    expect(state.checksum == 60'135,
-           "checksum includes late and duplicate messages");
+    expect(state.checksum == 60'135, "checksum includes late and duplicate messages");
 }
 
-void expect_invalid(const std::uint8_t* data, std::size_t size, 
-                                            ChannelState& state) {
+void expect_invalid(const std::uint8_t* data, std::size_t size, ChannelState& state) {
     const auto before = state;
 
-    expect(!udp_ingestion::process_datagram(data, size, state),
-           "invalid datagram is rejected");
+    expect(!udp_ingestion::process_datagram(data, size, state), "invalid datagram is rejected");
     expect(state.received_packets == before.received_packets + 1,
            "invalid datagram increments received count");
     expect(state.invalid_packets == before.invalid_packets + 1,
@@ -118,8 +105,7 @@ void expect_invalid(const std::uint8_t* data, std::size_t size,
                state.sequence_exhausted == before.sequence_exhausted &&
                state.gap_events == before.gap_events &&
                state.missing_packets == before.missing_packets &&
-               state.late_or_duplicate_packets ==
-                   before.late_or_duplicate_packets &&
+               state.late_or_duplicate_packets == before.late_or_duplicate_packets &&
                state.checksum == before.checksum,
            "invalid datagram leaves processing state unchanged");
 }
@@ -128,15 +114,13 @@ void test_invalid_datagrams() {
     ChannelState state{};
     deliver(1, state);
 
-    const auto pbuf =
-        udp_ingestion::encode_protocol_v1(make_message(2));
+    const auto pbuf = udp_ingestion::encode_protocol_v1(make_message(2));
 
     expect_invalid(nullptr, pbuf.size(), state);
     expect_invalid(pbuf.data(), 0, state);
     expect_invalid(pbuf.data(), pbuf.size() - 1, state);
 
-    std::array<std::uint8_t, udp_ingestion::kProtocolV1BufSize + 1>
-        oversized{};
+    std::array<std::uint8_t, udp_ingestion::kProtocolV1BufSize + 1> oversized{};
     for (std::size_t i = 0; i < pbuf.size(); ++i) {
         oversized[i] = pbuf[i];
     }
@@ -155,11 +139,9 @@ void test_invalid_datagrams() {
     expect(state.received_packets == 8, "total count includes invalid input");
     expect(state.valid_packets == 2, "two valid datagrams were processed");
     expect(state.invalid_packets == 6, "six invalid datagrams were rejected");
-    expect(state.received_packets ==
-               state.valid_packets + state.invalid_packets,
+    expect(state.received_packets == state.valid_packets + state.invalid_packets,
            "received equals valid plus invalid");
-    expect(state.expected_sequence == 3,
-           "valid processing continues after invalid input");
+    expect(state.expected_sequence == 3, "valid processing continues after invalid input");
 }
 
 void test_independent_channels() {
@@ -170,21 +152,16 @@ void test_independent_channels() {
     deliver(1, state_ch1);
     deliver(2, state_ch1);
 
-    expect(state_ch0.received_packets == 1 &&
-               state_ch0.expected_sequence == 4 &&
-               state_ch0.gap_events == 1 &&
-               state_ch0.missing_packets == 2,
+    expect(state_ch0.received_packets == 1 && state_ch0.expected_sequence == 4 &&
+               state_ch0.gap_events == 1 && state_ch0.missing_packets == 2,
            "channel zero tracks an initial gap");
 
-    expect(state_ch1.received_packets == 2 &&
-               state_ch1.expected_sequence == 3 &&
-               state_ch1.gap_events == 0 &&
-               state_ch1.missing_packets == 0 &&
+    expect(state_ch1.received_packets == 2 && state_ch1.expected_sequence == 3 &&
+               state_ch1.gap_events == 0 && state_ch1.missing_packets == 0 &&
                state_ch1.late_or_duplicate_packets == 0,
            "channel one is unaffected by channel zero");
 
-    expect(state_ch0.checksum == 10'020 &&
-               state_ch1.checksum == 20'037,
+    expect(state_ch0.checksum == 10'020 && state_ch1.checksum == 20'037,
            "channels accumulate checksums independently");
 }
 
@@ -194,20 +171,17 @@ void test_sequence_exhaustion() {
     state.expected_sequence = maximum - 1;
 
     deliver(maximum - 1, state);
-    expect(state.expected_sequence == maximum,
-           "expectation can reach UINT64_MAX");
+    expect(state.expected_sequence == maximum, "expectation can reach UINT64_MAX");
     expect(!state.sequence_exhausted, "UINT64_MAX is still expected");
 
     deliver(maximum, state);
     expect(state.sequence_exhausted, "UINT64_MAX exhausts sequence space");
-    expect(state.expected_sequence == maximum,
-           "expectation does not wrap to zero");
+    expect(state.expected_sequence == maximum, "expectation does not wrap to zero");
 
     deliver(maximum, state);
     deliver(0, state);
 
-    expect(state.late_or_duplicate_packets == 2,
-           "packets after exhaustion are late or duplicate");
+    expect(state.late_or_duplicate_packets == 2, "packets after exhaustion are late or duplicate");
     expect(state.gap_events == 0 && state.missing_packets == 0,
            "exhaustion does not create false gaps");
     expect(state.sequence_exhausted, "exhaustion remains set");
@@ -220,22 +194,18 @@ void test_signed_price_and_checksum_wrap() {
     const auto wire = udp_ingestion::encode_protocol_v1(message);
     ChannelState negative_state{};
 
-    expect(
-        udp_ingestion::process_datagram(
-            wire.data(), wire.size(), negative_state),
-        "negative price decodes and is processed");
+    expect(udp_ingestion::process_datagram(wire.data(), wire.size(), negative_state),
+           "negative price decodes and is processed");
 
     // Other fields sum to 18; adding price -2 modulo 2^64 gives 16.
-    expect(negative_state.checksum == 16,
-           "negative price contributes to unsigned checksum");
+    expect(negative_state.checksum == 16, "negative price contributes to unsigned checksum");
 
     ChannelState wrapping_state{};
     wrapping_state.checksum = std::numeric_limits<std::uint64_t>::max();
 
     deliver(1, wrapping_state);
 
-    expect(wrapping_state.checksum == 10'017,
-           "checksum wraps modulo 2^64");
+    expect(wrapping_state.checksum == 10'017, "checksum wraps modulo 2^64");
 }
 
 void test_separate_rx_and_downstream() {
@@ -245,35 +215,30 @@ void test_separate_rx_and_downstream() {
     auto pbuf = udp_ingestion::encode_protocol_v1(make_message(1));
     MarketDataMessage decoded{};
 
-    const bool first_valid = udp_ingestion::decode_and_track_datagram(
-        pbuf.data(), pbuf.size(), decoded, rx_state);
+    const bool first_valid =
+        udp_ingestion::decode_and_track_datagram(pbuf.data(), pbuf.size(), decoded, rx_state);
 
     expect(first_valid, "RX accepts the first valid datagram");
     expect(rx_state.received_packets == 1 && rx_state.valid_packets == 1,
            "RX updates receive counters");
-    expect(rx_state.expected_sequence == 2,
-           "RX updates sequence state");
-    expect(rx_state.checksum == 0,
-           "RX-only processing does not accumulate checksum");
-    expect(downstream_state.processed_packets == 0 &&
-               downstream_state.checksum == 0,
+    expect(rx_state.expected_sequence == 2, "RX updates sequence state");
+    expect(rx_state.checksum == 0, "RX-only processing does not accumulate checksum");
+    expect(downstream_state.processed_packets == 0 && downstream_state.checksum == 0,
            "RX processing leaves downstream state untouched");
 
     if (first_valid) {
         udp_ingestion::process_downstream_message(decoded, downstream_state);
     }
 
-    expect(downstream_state.processed_packets == 1,
-           "downstream counts a processed event");
-    expect(downstream_state.checksum == 10'018,
-           "downstream performs deterministic accumulation");
+    expect(downstream_state.processed_packets == 1, "downstream counts a processed event");
+    expect(downstream_state.checksum == 10'018, "downstream performs deterministic accumulation");
     expect(rx_state.valid_packets == 1 && rx_state.expected_sequence == 2,
            "downstream does not repeat RX sequence accounting");
 
     pbuf = udp_ingestion::encode_protocol_v1(make_message(2));
 
-    const bool invalid_accepted = udp_ingestion::decode_and_track_datagram(
-        pbuf.data(), pbuf.size() - 1, decoded, rx_state);
+    const bool invalid_accepted =
+        udp_ingestion::decode_and_track_datagram(pbuf.data(), pbuf.size() - 1, decoded, rx_state);
 
     expect(!invalid_accepted, "RX rejects a short datagram");
 
@@ -281,18 +246,15 @@ void test_separate_rx_and_downstream() {
         udp_ingestion::process_downstream_message(decoded, downstream_state);
     }
 
-    expect(rx_state.received_packets == 2 &&
-               rx_state.valid_packets == 1 &&
+    expect(rx_state.received_packets == 2 && rx_state.valid_packets == 1 &&
                rx_state.invalid_packets == 1,
            "invalid input is accounted for only at RX");
-    expect(rx_state.expected_sequence == 2,
-           "invalid input leaves sequence unchanged");
-    expect(downstream_state.processed_packets == 1 &&
-               downstream_state.checksum == 10'018,
+    expect(rx_state.expected_sequence == 2, "invalid input leaves sequence unchanged");
+    expect(downstream_state.processed_packets == 1 && downstream_state.checksum == 10'018,
            "invalid input is not processed downstream");
 
-    const bool second_valid = udp_ingestion::decode_and_track_datagram(
-        pbuf.data(), pbuf.size(), decoded, rx_state);
+    const bool second_valid =
+        udp_ingestion::decode_and_track_datagram(pbuf.data(), pbuf.size(), decoded, rx_state);
 
     expect(second_valid, "RX accepts the next valid datagram");
 
@@ -300,15 +262,12 @@ void test_separate_rx_and_downstream() {
         udp_ingestion::process_downstream_message(decoded, downstream_state);
     }
 
-    expect(rx_state.received_packets == 3 &&
-               rx_state.valid_packets == 2 &&
+    expect(rx_state.received_packets == 3 && rx_state.valid_packets == 2 &&
                rx_state.expected_sequence == 3,
            "RX resumes normal sequence tracking");
-    expect(downstream_state.processed_packets == 2 &&
-               downstream_state.checksum == 20'037,
+    expect(downstream_state.processed_packets == 2 && downstream_state.checksum == 20'037,
            "separated processing preserves the original checksum");
-    expect(rx_state.checksum == 0,
-           "staged RX checksum remains untouched");
+    expect(rx_state.checksum == 0, "staged RX checksum remains untouched");
 }
 
 } // namespace

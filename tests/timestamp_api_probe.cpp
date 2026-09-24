@@ -18,60 +18,47 @@ namespace {
 void require_success(int result, const char* operation) {
     if (result < 0) {
         const int error = errno;
-        throw std::system_error(
-            error, std::generic_category(), operation);
+        throw std::system_error(error, std::generic_category(), operation);
     }
 }
 
 timespec realtime_now() {
     timespec value{};
-    require_success(
-        ::clock_gettime(CLOCK_REALTIME, &value), "clock_gettime");
+    require_success(::clock_gettime(CLOCK_REALTIME, &value), "clock_gettime");
     return value;
 }
 
 void run_probe(int fd) {
     const int enabled = 1;
-    require_success(
-        ::setsockopt(
-            fd, SOL_SOCKET, SO_TIMESTAMPNS_NEW,
-            &enabled, sizeof(enabled)),
-        "setsockopt SO_TIMESTAMPNS_NEW");
+    require_success(::setsockopt(fd, SOL_SOCKET, SO_TIMESTAMPNS_NEW, &enabled, sizeof(enabled)),
+                    "setsockopt SO_TIMESTAMPNS_NEW");
 
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     address.sin_port = 0;
 
-    require_success(
-        ::bind(fd, reinterpret_cast<const sockaddr*>(&address),
-               sizeof(address)),
-        "bind");
+    require_success(::bind(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)),
+                    "bind");
 
     socklen_t address_size = sizeof(address);
-    require_success(
-        ::getsockname(fd, reinterpret_cast<sockaddr*>(&address),
-                      &address_size),
-        "getsockname");
+    require_success(::getsockname(fd, reinterpret_cast<sockaddr*>(&address), &address_size),
+                    "getsockname");
 
-    std::cout
-        << "SO_TIMESTAMPNS_NEW=" << SO_TIMESTAMPNS_NEW
-        << "\nSCM_TIMESTAMPNS=" << SCM_TIMESTAMPNS
-        << "\nsizeof(__kernel_timespec)=" << sizeof(__kernel_timespec)
-        << "\nsizeof(timespec)=" << sizeof(timespec)
-        << '\n';
+    std::cout << "SO_TIMESTAMPNS_NEW=" << SO_TIMESTAMPNS_NEW
+              << "\nSCM_TIMESTAMPNS=" << SCM_TIMESTAMPNS
+              << "\nsizeof(__kernel_timespec)=" << sizeof(__kernel_timespec)
+              << "\nsizeof(timespec)=" << sizeof(timespec) << '\n';
 
     const char sent_byte = 'T';
     const auto before = realtime_now();
 
-    const auto sent = ::sendto(
-        fd, &sent_byte, sizeof(sent_byte), 0,
-        reinterpret_cast<const sockaddr*>(&address), sizeof(address));
+    const auto sent = ::sendto(fd, &sent_byte, sizeof(sent_byte), 0,
+                               reinterpret_cast<const sockaddr*>(&address), sizeof(address));
 
     if (sent < 0) {
         const int error = errno;
-        throw std::system_error(
-            error, std::generic_category(), "sendto");
+        throw std::system_error(error, std::generic_category(), "sendto");
     }
     if (sent != static_cast<ssize_t>(sizeof(sent_byte))) {
         throw std::runtime_error("unexpected send size");
@@ -110,8 +97,7 @@ void run_probe(int fd) {
     const auto received = ::recvmsg(fd, &message, MSG_DONTWAIT);
     if (received < 0) {
         const int error = errno;
-        throw std::system_error(
-            error, std::generic_category(), "recvmsg");
+        throw std::system_error(error, std::generic_category(), "recvmsg");
     }
 
     const auto after = realtime_now();
@@ -119,30 +105,24 @@ void run_probe(int fd) {
     if ((message.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) != 0) {
         throw std::runtime_error("payload or control data truncated");
     }
-    if (received != static_cast<ssize_t>(sizeof(received_byte))
-        || received_byte != sent_byte) {
+    if (received != static_cast<ssize_t>(sizeof(received_byte)) || received_byte != sent_byte) {
         throw std::runtime_error("unexpected received payload");
     }
 
     __kernel_timespec rx{};
     bool found = false;
 
-    for (auto* cmsg = CMSG_FIRSTHDR(&message);
-         cmsg != nullptr;
+    for (auto* cmsg = CMSG_FIRSTHDR(&message); cmsg != nullptr;
          cmsg = CMSG_NXTHDR(&message, cmsg)) {
         if (cmsg->cmsg_len < CMSG_LEN(0)) {
             throw std::runtime_error("invalid control message length");
         }
 
-        std::cout
-            << "cmsg_level=" << cmsg->cmsg_level
-            << " cmsg_type=" << cmsg->cmsg_type
-            << " cmsg_len=" << cmsg->cmsg_len
-            << " payload_bytes=" << cmsg->cmsg_len - CMSG_LEN(0)
-            << '\n';
+        std::cout << "cmsg_level=" << cmsg->cmsg_level << " cmsg_type=" << cmsg->cmsg_type
+                  << " cmsg_len=" << cmsg->cmsg_len
+                  << " payload_bytes=" << cmsg->cmsg_len - CMSG_LEN(0) << '\n';
 
-        if (cmsg->cmsg_level != SOL_SOCKET
-            || cmsg->cmsg_type != SO_TIMESTAMPNS_NEW) {
+        if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SO_TIMESTAMPNS_NEW) {
             continue;
         }
 
@@ -164,26 +144,18 @@ void run_probe(int fd) {
         throw std::runtime_error("invalid timestamp nanoseconds");
     }
 
-    std::cout
-        << "before_sec=" << before.tv_sec
-        << " before_nsec=" << before.tv_nsec
-        << "\nrx_sec=" << rx.tv_sec
-        << " rx_nsec=" << rx.tv_nsec
-        << "\nafter_sec=" << after.tv_sec
-        << " after_nsec=" << after.tv_nsec
-        << '\n';
+    std::cout << "before_sec=" << before.tv_sec << " before_nsec=" << before.tv_nsec
+              << "\nrx_sec=" << rx.tv_sec << " rx_nsec=" << rx.tv_nsec
+              << "\nafter_sec=" << after.tv_sec << " after_nsec=" << after.tv_nsec << '\n';
 
     const bool after_send_start =
-        rx.tv_sec > before.tv_sec
-        || (rx.tv_sec == before.tv_sec && rx.tv_nsec >= before.tv_nsec);
+        rx.tv_sec > before.tv_sec || (rx.tv_sec == before.tv_sec && rx.tv_nsec >= before.tv_nsec);
 
     const bool before_receive_end =
-        rx.tv_sec < after.tv_sec
-        || (rx.tv_sec == after.tv_sec && rx.tv_nsec <= after.tv_nsec);
+        rx.tv_sec < after.tv_sec || (rx.tv_sec == after.tv_sec && rx.tv_nsec <= after.tv_nsec);
 
     if (!after_send_start || !before_receive_end) {
-        throw std::runtime_error(
-            "RX timestamp outside CLOCK_REALTIME interval");
+        throw std::runtime_error("RX timestamp outside CLOCK_REALTIME interval");
     }
 
     std::cout << "timestamp API probe passed\n";
@@ -196,9 +168,7 @@ int main() {
 
     if (fd < 0) {
         const int error = errno;
-        std::cerr << "socket: "
-                  << std::system_error(error, std::generic_category()).what()
-                  << '\n';
+        std::cerr << "socket: " << std::system_error(error, std::generic_category()).what() << '\n';
         return 1;
     }
 

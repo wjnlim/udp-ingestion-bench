@@ -16,6 +16,7 @@ public:
     }
 
     void notify();
+
 private:
     int fd_ = -1;
 };

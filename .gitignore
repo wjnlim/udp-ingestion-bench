@@ -4,6 +4,8 @@
 /compile_commands.json
 /docs/
 /.vscode/settings.json
+/scripts/__pycache__
+.ignore
 
 # Common compiler and editor artifacts
 *.o

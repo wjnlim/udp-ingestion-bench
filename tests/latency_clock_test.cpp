@@ -1,4 +1,4 @@
-#include "udp_ingestion/latency_clock.hpp"
+#include "udp_ingestion/latency.hpp"
 
 #include <time.h>
 
@@ -21,15 +21,11 @@ void expect(bool condition, const char* description) {
     }
 }
 
-void expect_rejected(
-    std::int64_t rx,
-    std::int64_t completion,
-    const char* description) {
+void expect_rejected(std::int64_t rx, std::int64_t completion, const char* description) {
     bool rejected = false;
 
     try {
-        static_cast<void>(
-            udp_ingestion::calculate_latency_ns(rx, completion));
+        static_cast<void>(udp_ingestion::calculate_latency_ns(rx, completion));
     } catch (const std::runtime_error&) {
         rejected = true;
     }
@@ -42,19 +38,15 @@ void test_latency_values() {
 
     constexpr auto maximum = std::numeric_limits<std::int64_t>::max();
 
-    expect(calculate_latency_ns(100, 125) == 25,
-           "latency is completion minus reception");
-    expect(calculate_latency_ns(0, 0) == 0,
-           "zero timestamps produce zero latency");
-    expect(calculate_latency_ns(100, 100) == 0,
-           "equal timestamps produce zero latency");
+    expect(calculate_latency_ns(100, 125) == 25, "latency is completion minus reception");
+    expect(calculate_latency_ns(0, 0) == 0, "zero timestamps produce zero latency");
+    expect(calculate_latency_ns(100, 100) == 0, "equal timestamps produce zero latency");
 
     expect(calculate_latency_ns(0, maximum) == maximum,
            "maximum representable latency is accepted");
     expect(calculate_latency_ns(maximum - 1, maximum) == 1,
            "subtraction near INT64_MAX is correct");
-    expect(calculate_latency_ns(maximum, maximum) == 0,
-           "equal maximum timestamps are accepted");
+    expect(calculate_latency_ns(maximum, maximum) == 0, "equal maximum timestamps are accepted");
 }
 
 void test_invalid_latency_inputs() {
@@ -66,9 +58,8 @@ void test_invalid_latency_inputs() {
     expect_rejected(-1, -1, "equal negative timestamps are rejected");
     expect_rejected(101, 100, "completion before RX is rejected");
     expect_rejected(maximum, 0, "large backward interval is rejected");
-    expect_rejected(
-        minimum, maximum,
-        "potentially overflowing subtraction is rejected before arithmetic");
+    expect_rejected(minimum, maximum,
+                    "potentially overflowing subtraction is rejected before arithmetic");
 }
 
 timespec read_reference_clock() {
@@ -76,9 +67,8 @@ timespec read_reference_clock() {
 
     if (::clock_gettime(CLOCK_REALTIME, &timestamp) != 0) {
         const int error = errno;
-        throw std::system_error(
-            error, std::generic_category(),
-            "reference clock_gettime CLOCK_REALTIME");
+        throw std::system_error(error, std::generic_category(),
+                                "reference clock_gettime CLOCK_REALTIME");
     }
 
     return timestamp;
@@ -99,12 +89,10 @@ void test_realtime_read() {
     const auto nanoseconds = observed % scale;
 
     const bool not_before_reference =
-        seconds > before.tv_sec
-        || (seconds == before.tv_sec && nanoseconds >= before.tv_nsec);
+        seconds > before.tv_sec || (seconds == before.tv_sec && nanoseconds >= before.tv_nsec);
 
     const bool not_after_reference =
-        seconds < after.tv_sec
-        || (seconds == after.tv_sec && nanoseconds <= after.tv_nsec);
+        seconds < after.tv_sec || (seconds == after.tv_sec && nanoseconds <= after.tv_nsec);
 
     expect(not_before_reference && not_after_reference,
            "clock helper matches the surrounding CLOCK_REALTIME reads");

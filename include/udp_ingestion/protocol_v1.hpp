@@ -44,8 +44,6 @@ using ProtocolV1Buffer = std::array<std::uint8_t, kProtocolV1BufSize>;
     Total payload size: 34 bytes.
 */
 ProtocolV1Buffer encode_protocol_v1(const MarketDataMessage& message);
-bool decode_protocol_v1(const std::uint8_t* data,
-                        std::size_t size,
-                        MarketDataMessage& message);
+bool decode_protocol_v1(const std::uint8_t* data, std::size_t size, MarketDataMessage& message);
 
-}  // namespace udp_ingestion
+} // namespace udp_ingestion

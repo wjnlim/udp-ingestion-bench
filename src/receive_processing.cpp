@@ -5,8 +5,7 @@
 namespace udp_ingestion {
 namespace {
 
-void track_message_sequence(const MarketDataMessage& message, 
-                                        ChannelState& state) {
+void track_message_sequence(const MarketDataMessage& message, ChannelState& state) {
     ++state.valid_packets;
     const auto sequence = message.sequence;
 
@@ -26,8 +25,7 @@ void track_message_sequence(const MarketDataMessage& message,
     }
 }
 
-void accumulate_checksum(
-    const MarketDataMessage& message, std::uint64_t& checksum) {
+void accumulate_checksum(const MarketDataMessage& message, std::uint64_t& checksum) {
     // Simulates minimal processing; not a runtime correctness comparison.
     checksum += message.sequence;
     checksum += message.order_id;
@@ -40,7 +38,7 @@ void accumulate_checksum(
 } // namespace
 
 bool decode_and_track_datagram(const std::uint8_t* data, std::size_t size,
-            MarketDataMessage& message, ChannelState& state) {
+                               MarketDataMessage& message, ChannelState& state) {
     ++state.received_packets;
 
     if (!decode_protocol_v1(data, size, message)) {
@@ -52,8 +50,7 @@ bool decode_and_track_datagram(const std::uint8_t* data, std::size_t size,
     return true;
 }
 
-void process_downstream_message(const MarketDataMessage& message,
-                                            DownstreamState& state) {
+void process_downstream_message(const MarketDataMessage& message, DownstreamState& state) {
     accumulate_checksum(message, state.checksum);
     ++state.processed_packets;
 }
@@ -64,10 +61,8 @@ void process_message(const MarketDataMessage& message, ChannelState& state) {
     accumulate_checksum(message, state.checksum);
 }
 
-
 // Compatibility entry point for existing callers.
-bool process_datagram(const std::uint8_t* data, std::size_t size, 
-                                                ChannelState& state) {
+bool process_datagram(const std::uint8_t* data, std::size_t size, ChannelState& state) {
     MarketDataMessage message{};
     if (!decode_and_track_datagram(data, size, message, state)) {
         return false;
