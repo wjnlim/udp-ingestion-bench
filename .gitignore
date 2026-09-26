@@ -5,6 +5,7 @@
 /docs/
 /.vscode/settings.json
 /scripts/__pycache__
+README_*
 .ignore
 
 # Common compiler and editor artifacts

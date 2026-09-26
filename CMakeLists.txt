@@ -70,6 +70,32 @@ target_link_libraries(epoll_receiver
 )
 enable_project_warnings(epoll_receiver)
 
+option(BUILD_LIBEVENT_RECEIVER
+    "Build the libevent validation receiver"
+    OFF
+)
+
+if (BUILD_LIBEVENT_RECEIVER)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LIBEVENT REQUIRED IMPORTED_TARGET libevent>=2.1)
+
+    add_executable(libevent_receiver
+        src/libevent_receiver.cpp
+        src/receiver_reporting.cpp
+        src/libevent_receive_worker.cpp
+        src/downstream_worker.cpp
+        src/run_timing.cpp
+        src/latency.cpp
+        src/stop_event.cpp
+        src/timestamped_receive.cpp
+        src/cpu_affinity.cpp
+    )
+    target_link_libraries(libevent_receiver
+        PRIVATE receive_processing Threads::Threads PkgConfig::LIBEVENT
+    )
+    enable_project_warnings(libevent_receiver)
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
     add_executable(protocol_v1_test tests/protocol_v1_test.cpp)
@@ -219,5 +245,44 @@ if(BUILD_TESTING)
     set_tests_properties(run_timing_test PROPERTIES
         TIMEOUT 30
     )
+
+    if(BUILD_LIBEVENT_RECEIVER)
+        add_executable(libevent_backend_probe
+            tests/libevent_backend_probe.cpp
+        )
+        target_link_libraries(libevent_backend_probe
+            PRIVATE PkgConfig::LIBEVENT
+        )
+        enable_project_warnings(libevent_backend_probe)
+
+        add_test(
+            NAME libevent_backend_probe
+            COMMAND libevent_backend_probe
+        )
+        set_tests_properties(libevent_backend_probe PROPERTIES
+            TIMEOUT 10
+        )
+
+                add_executable(libevent_receive_worker_test
+            tests/libevent_receive_worker_test.cpp
+            src/libevent_receive_worker.cpp
+            src/stop_event.cpp
+            src/timestamped_receive.cpp
+            src/cpu_affinity.cpp
+        )
+        target_link_libraries(libevent_receive_worker_test
+            PRIVATE receive_processing Threads::Threads PkgConfig::LIBEVENT
+        )
+        enable_project_warnings(libevent_receive_worker_test)
+
+        add_test(
+            NAME libevent_receive_worker_test
+            COMMAND libevent_receive_worker_test
+        )
+        set_tests_properties(libevent_receive_worker_test PROPERTIES
+            TIMEOUT 10
+            RUN_SERIAL TRUE
+        )
+    endif()
 
 endif()

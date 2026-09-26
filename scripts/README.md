@@ -11,6 +11,8 @@ python3 -B scripts/run_once.py --architecture dedicated \
 
 Use `--architecture epoll` for the other receiver. Each invocation needs a new
 output directory. `--help` lists CPU assignments and timeout options.
+Libevent is not a supported harness architecture; use the manual comparison
+commands in the [project README](../README.md#optional-libevent-validation).
 
 ## Responsibilities
 
@@ -39,9 +41,9 @@ New runs do not produce JSON. Existing result directories are not modified.
 Metadata is limited to git commit, receiver architecture, requested load, run
 index, requested CPU assignments, SPSC capacity, epoll service budget, pause,
 kernel version and build type. CPU `inherited` means no explicit pin was requested;
-`NA` means that role does not apply. The current C++ baseline has a fixed epoll
-budget of 64 and no pause instruction (`off`); update these metadata constants if
-that baseline changes. They are not runtime switches.
+`NA` means that role does not apply. The epoll service budget is fixed at 64;
+update its metadata constant if the C++ budget changes. Dedicated RX supports
+the runtime option `--rx-pause off|on`, defaulting to `off`; epoll rejects `on`.
 
 Build type comes from CMakeCache; git commit does not identify uncommitted edits
 or prove that binaries are fresh. Rebuild and use a recorded commit for published
