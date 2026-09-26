@@ -23,7 +23,7 @@ The two primary receiver paths differ only in how the sockets are serviced befor
 Dedicated
 
 UDP ch0 -> RX0: active polling -> decode/validate -> SPSC0 --\
-                                                          -> downstream -> checksum + latency
+                                                              -> downstream -> checksum + latency
 UDP ch1 -> RX1: active polling -> decode/validate -> SPSC1 --/
 ```
 
