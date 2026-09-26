@@ -2,8 +2,10 @@
 
 `udp-ingestion-bench` is a C++17/Linux benchmark for comparing two UDP ingestion architectures under the same synthetic workload:
 
-- **Dedicated polling:** one CPU-pinned, non-blocking RX thread per UDP channel, continuously retrying receive.
+- **Dedicated active polling:** one CPU-pinned, non-blocking RX thread per UDP channel, continuously retrying receive.
 - **Readiness-driven multiplexing:** one CPU-pinned, level-triggered `epoll` RX execution loop multiplexing UDP channels.
+
+Here, “active polling” means repeatedly issuing non-blocking receive calls in userspace; it does **not** refer to the Linux `poll()` API.
 
 Both designs use the same wire protocol, decoding and sequence validation, bounded SPSC handoff, downstream processing, timestamping, warmup policy, and result accounting. The comparison intentionally gives the two designs different RX execution-context and CPU budgets: this is an end-to-end architecture/resource-allocation comparison, **not** a microbenchmark of `recvmsg()` versus `epoll_wait()`.
 
@@ -20,9 +22,9 @@ The two primary receiver paths differ only in how the sockets are serviced befor
 ```text
 Dedicated
 
-UDP ch0 -> RX0: active poll -> decode/validate -> SPSC0 --\
+UDP ch0 -> RX0: active polling -> decode/validate -> SPSC0 --\
                                                           -> downstream -> checksum + latency
-UDP ch1 -> RX1: active poll -> decode/validate -> SPSC1 --/
+UDP ch1 -> RX1: active polling -> decode/validate -> SPSC1 --/
 ```
 
 ```text
